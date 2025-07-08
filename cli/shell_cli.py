@@ -28,8 +28,11 @@ def replay_session(base_url: str, session: str) -> None:
     print(data)
 
 
-def tail_output(base_url: str, user_id: str, interval: float = 1.0) -> None:
-    last_id: Any = None
+def tail_output(
+    base_url: str, user_id: str, interval: float = 1.0, since: int | None = None
+) -> None:
+    """Poll for new output and print it continuously."""
+    last_id: Any = since
     try:
         while True:
             params = {"user_id": f"eq.{user_id}"}
@@ -67,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     tail_p = sub.add_parser("tail", help="Tail latest output")
     tail_p.add_argument("--user", required=True, help="User ID")
     tail_p.add_argument("--interval", type=float, default=1.0, help="Polling interval seconds")
+    tail_p.add_argument("--since", type=int, help="Start tailing after this command ID")
 
     args = parser.parse_args(argv)
 
@@ -77,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "fork":
         fork_session(args.base_url, args.user, args.at)
     elif args.command == "tail":
-        tail_output(args.base_url, args.user, args.interval)
+        tail_output(args.base_url, args.user, args.interval, args.since)
     else:
         parser.print_help()
         return 1
