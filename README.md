@@ -37,6 +37,19 @@ The frontend is a simple HTML+htmx app; no JavaScript-heavy terminal emulators, 
 -- Installs pg_shell PL/pgSQL functions and extensions
 ```
 
+**2. Install Python requirements**
+```bash
+pip install -r requirements.txt
+```
+
+**3. Run the executor agent**
+```bash
+DATABASE_URL=postgresql://localhost/postgres python workers/executor_agent.py
+```
+
+You can run `cleanup_agent.py` periodically and use `replay_agent.py` for
+session replays.
+
 ## Serving the HTML UI
 
 The `html/` directory contains a minimal `index.html` using htmx. Any

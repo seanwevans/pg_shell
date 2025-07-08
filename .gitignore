@@ -1,0 +1,16 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+
+# C extensions
+*.so
+
+# Virtual environment
+venv/
+.env
+
+# Logs
+*.log
+
+# Misc
+.DS_Store
