@@ -35,3 +35,16 @@ The frontend is a simple HTML+htmx app; no JavaScript-heavy terminal emulators, 
 ```sql
 \i sql/init_schema.sql
 -- Installs pg_shell PL/pgSQL functions and extensions
+```
+
+## Serving the HTML UI
+
+The `html/` directory contains a minimal `index.html` using htmx. Any
+static web server can host it:
+
+```bash
+cd html && python3 -m http.server 8080
+```
+
+When running PostgREST you can also point `server-static-path` to this
+folder so the UI is served alongside your RPC endpoints.

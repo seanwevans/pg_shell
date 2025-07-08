@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>pg_shell</title>
+  <script src="https://unpkg.com/htmx.org@1.9.6"></script>
+</head>
+<body>
+<div id="output"
+  hx-get="/rpc/latest_output?user_id=eq.USER_ID"
+  hx-trigger="load, every 1s"
+  hx-swap="innerHTML">
+</div>
+
+<form
+  hx-post="/rpc/submit_command"
+  hx-trigger="submit from:form"
+  hx-target="#output"
+  hx-swap="beforeend"
+>
+  <input type="hidden" name="user_id" value="USER_ID" />
+  <input name="command" autocomplete="off" autofocus placeholder="Enter command…" />
+</form>
+</body>
+</html>
