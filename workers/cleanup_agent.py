@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+import argparse
+import logging
+import os
+import sys
+import time
+
+import psycopg2
+
+
+def get_conn():
+    dsn = os.environ.get("DATABASE_URL") or os.environ.get("PG_CONN")
+    if not dsn:
+        logging.error("DATABASE_URL or PG_CONN environment variable required")
+        sys.exit(1)
+    return psycopg2.connect(dsn)
+
+
+def cleanup_once(conn):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM commands
+             WHERE status = 'done'
+               AND submitted_at < now() - interval '90 days'
+            RETURNING id
+            """
+        )
+        deleted = cur.rowcount
+        logging.info("Deleted %d old commands", deleted)
+
+        cur.execute(
+            """
+            SELECT user_id FROM environments
+             WHERE updated_at < now() - interval '90 days'
+            """
+        )
+        user_ids = [r[0] for r in cur.fetchall()]
+        for uid in user_ids:
+            logging.info("Resetting environment for user %s", uid)
+            cur.execute(
+                """
+                UPDATE environments
+                   SET cwd = '/home/sandbox', env = '{}', updated_at = now()
+                 WHERE user_id = %s
+                """,
+                (uid,),
+            )
+    conn.commit()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Cleanup old commands and environments")
+    parser.add_argument(
+        "--interval", type=int, default=3600,
+        help="Seconds between cleanup runs (default: 3600)"
+    )
+    parser.add_argument(
+        "--once", action="store_true", help="Run cleanup once and exit"
+    )
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+
+    while True:
+        conn = get_conn()
+        try:
+            cleanup_once(conn)
+        finally:
+            conn.close()
+        if args.once:
+            break
+        time.sleep(args.interval)
+
+
+if __name__ == "__main__":
+    main()
