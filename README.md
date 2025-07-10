@@ -46,6 +46,7 @@ pip install -r requirements.txt
 ```bash
 DATABASE_URL=postgresql://localhost/postgres python workers/executor_agent.py
 ```
+Set `COMMAND_TIMEOUT` (seconds) to limit how long each command may run.
 
 You can run `cleanup_agent.py` periodically and use `replay_agent.py` for
 session replays.
