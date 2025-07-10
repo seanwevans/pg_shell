@@ -19,6 +19,7 @@ from psycopg2.extras import RealDictCursor
 POLL_INTERVAL = float(os.getenv("POLL_INTERVAL", "1"))
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://localhost/postgres")
 LISTEN_CHANNEL = os.getenv("LISTEN_CHANNEL", "new_command")
+COMMAND_TIMEOUT = int(os.getenv("COMMAND_TIMEOUT", "30"))
 
 
 def get_conn():
@@ -90,7 +91,12 @@ def run_subprocess(command: str, cwd: str, env_snapshot: Any) -> tuple[int, str]
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
-    out, _ = proc.communicate()
+    try:
+        out, _ = proc.communicate(timeout=COMMAND_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out, _ = proc.communicate()
+        return 124, f"Timed out after {COMMAND_TIMEOUT}s\n" + out.decode()
     return proc.returncode, out.decode()
 
 
