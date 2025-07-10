@@ -61,3 +61,8 @@ cd html && python3 -m http.server 8080
 
 When running PostgREST you can also point `server-static-path` to this
 folder so the UI is served alongside your RPC endpoints.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
+
