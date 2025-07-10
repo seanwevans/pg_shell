@@ -62,6 +62,14 @@ cd html && python3 -m http.server 8080
 
 When running PostgREST you can also point `server-static-path` to this
 folder so the UI is served alongside your RPC endpoints.
+## Running Tests
+
+Tests require a PostgreSQL database. Set `TEST_DATABASE_URL` to a DSN with privileges to create tables. Then run:
+```bash
+pip install -r requirements.txt
+pytest
+```
+
 
 ## License
 
