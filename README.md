@@ -49,7 +49,15 @@ DATABASE_URL=postgresql://localhost/postgres python workers/executor_agent.py
 Set `COMMAND_TIMEOUT` (seconds) to limit how long each command may run.
 
 You can run `cleanup_agent.py` periodically and use `replay_agent.py` for
-session replays.
+session replays. The cleanup agent accepts a `--days` option or `CLEANUP_DAYS`
+environment variable to control how old commands and environments must be
+before they're removed (default: 90 days).
+For example:
+```bash
+CLEANUP_DAYS=30 python workers/cleanup_agent.py --once
+# or
+python workers/cleanup_agent.py --days 30
+```
 
 ## Serving the HTML UI
 

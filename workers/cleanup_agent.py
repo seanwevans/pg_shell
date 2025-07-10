@@ -16,15 +16,17 @@ def get_conn():
     return psycopg2.connect(dsn)
 
 
-def cleanup_once(conn):
+def cleanup_once(conn, days: int) -> None:
+    """Remove commands and reset environments older than ``days`` days."""
     with conn.cursor() as cur:
         cur.execute(
             """
             DELETE FROM commands
              WHERE status = 'done'
-               AND submitted_at < now() - interval '90 days'
+               AND submitted_at < now() - %s * interval '1 day'
             RETURNING id
-            """
+            """,
+            (days,),
         )
         deleted = cur.rowcount
         logging.info("Deleted %d old commands", deleted)
@@ -32,8 +34,9 @@ def cleanup_once(conn):
         cur.execute(
             """
             SELECT user_id FROM environments
-             WHERE updated_at < now() - interval '90 days'
-            """
+             WHERE updated_at < now() - %s * interval '1 day'
+            """,
+            (days,),
         )
         user_ids = [r[0] for r in cur.fetchall()]
         for uid in user_ids:
@@ -58,13 +61,19 @@ def main():
     parser.add_argument(
         "--once", action="store_true", help="Run cleanup once and exit"
     )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=int(os.getenv("CLEANUP_DAYS", "90")),
+        help="Age threshold in days (default: 90)",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     while True:
         conn = get_conn()
         try:
-            cleanup_once(conn)
+            cleanup_once(conn, args.days)
         finally:
             conn.close()
         if args.once:
