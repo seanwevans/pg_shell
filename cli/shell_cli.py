@@ -1,3 +1,10 @@
+"""Command line interface for interacting with a pg_shell deployment.
+
+This module provides helper functions to submit commands, fork or replay
+sessions, and stream command output. It is primarily a thin wrapper around the
+HTTP API exposed by the server.
+"""
+
 import argparse
 import os
 import sys
@@ -8,21 +15,76 @@ import requests
 
 
 def exec_command(base_url: str, user_id: str, cmd: str) -> None:
-    resp = requests.post(f"{base_url}/rpc/submit_command", json={"user_id": user_id, "command": cmd})
+    """Submit a command for execution.
+
+    Parameters
+    ----------
+    base_url : str
+        PostgREST base URL.
+    user_id : str
+        Identifier of the target user.
+    cmd : str
+        Command text to queue for execution.
+
+    Returns
+    -------
+    None
+    """
+
+    resp = requests.post(
+        f"{base_url}/rpc/submit_command",
+        json={"user_id": user_id, "command": cmd},
+    )
     resp.raise_for_status()
     data = resp.json()
     print(data)
 
 
 def fork_session(base_url: str, user_id: str, command_id: int) -> None:
-    resp = requests.post(f"{base_url}/rpc/fork_session", json={"user_id": user_id, "source_command_id": command_id})
+    """Create a new session starting from a previous command.
+
+    Parameters
+    ----------
+    base_url : str
+        PostgREST base URL.
+    user_id : str
+        User owning the new session.
+    command_id : int
+        Identifier of the command to fork at.
+
+    Returns
+    -------
+    None
+    """
+
+    resp = requests.post(
+        f"{base_url}/rpc/fork_session",
+        json={"user_id": user_id, "source_command_id": command_id},
+    )
     resp.raise_for_status()
     data = resp.json()
     print(data)
 
 
 def replay_session(base_url: str, session: str) -> None:
-    resp = requests.post(f"{base_url}/rpc/replay_session", json={"session": session})
+    """Request a replay of a past session.
+
+    Parameters
+    ----------
+    base_url : str
+        PostgREST base URL.
+    session : str
+        Timestamp or session ID to replay.
+
+    Returns
+    -------
+    None
+    """
+
+    resp = requests.post(
+        f"{base_url}/rpc/replay_session",
+        json={"session": session},
+    )
     resp.raise_for_status()
     data = resp.json()
     print(data)
@@ -52,6 +114,19 @@ def tail_output(
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Entry point for the CLI.
+
+    Parameters
+    ----------
+    argv : list[str] | None, optional
+        Argument list to parse instead of ``sys.argv``.
+
+    Returns
+    -------
+    int
+        Exit status code.
+    """
+
     parser = argparse.ArgumentParser(description="pg_shell CLI")
     parser.add_argument("--base-url", default=os.getenv("PG_SHELL_API", "http://localhost:3000"), help="PostgREST base URL")
     sub = parser.add_subparsers(dest="command", required=True)

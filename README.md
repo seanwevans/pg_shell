@@ -47,8 +47,11 @@ pip install -r requirements.txt
 DATABASE_URL=postgresql://localhost/postgres python workers/executor_agent.py
 ```
 Set `COMMAND_TIMEOUT` (seconds) to limit how long each command may run.
+Commands are parsed with `shlex.split` before execution, so quoting rules follow
+POSIX shells but features like glob expansion are not performed.
 
 You can run `cleanup_agent.py` periodically and use `replay_agent.py` for
+
 session replays. The optional `monitor_agent.py` emits usage metrics like
 command counts and average run time to stdout or CSV.
 
@@ -63,6 +66,14 @@ cd html && python3 -m http.server 8080
 
 When running PostgREST you can also point `server-static-path` to this
 folder so the UI is served alongside your RPC endpoints.
+## Running Tests
+
+Tests require a PostgreSQL database. Set `TEST_DATABASE_URL` to a DSN with privileges to create tables. Then run:
+```bash
+pip install -r requirements.txt
+pytest
+```
+
 
 ## License
 

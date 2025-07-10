@@ -1,2 +1,5 @@
+pytest
+
 psycopg2-binary
 requests
+
