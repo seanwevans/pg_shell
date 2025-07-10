@@ -9,6 +9,7 @@ implementation uses ``psycopg2`` and ``subprocess``. It also listens for the
 import json
 import os
 import select
+import shlex
 import subprocess
 import time
 from typing import Any, Dict
@@ -86,21 +87,21 @@ def run_subprocess(command: str, cwd: str, env_snapshot: Any) -> tuple[int, str]
             env.update(json.loads(env_snapshot))
         else:
             env.update(env_snapshot)
-    proc = subprocess.Popen(
-        command,
-        shell=True,
-        cwd=cwd,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+
+    cmd_list = shlex.split(command)
     try:
-        out, _ = proc.communicate(timeout=COMMAND_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        out, _ = proc.communicate()
-        return 124, f"Timed out after {COMMAND_TIMEOUT}s\n" + out.decode()
-    return proc.returncode, out.decode()
+        proc = subprocess.run(
+            cmd_list,
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=COMMAND_TIMEOUT,
+        )
+        return proc.returncode, proc.stdout
+    except subprocess.TimeoutExpired as exc:
+        output = exc.stdout or ""
+        return 124, f"Timed out after {COMMAND_TIMEOUT}s\n" + output
 
 
 def handle_command(conn, row: Dict[str, Any]) -> None:

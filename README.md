@@ -47,6 +47,8 @@ pip install -r requirements.txt
 DATABASE_URL=postgresql://localhost/postgres python workers/executor_agent.py
 ```
 Set `COMMAND_TIMEOUT` (seconds) to limit how long each command may run.
+Commands are parsed with `shlex.split` before execution, so quoting rules follow
+POSIX shells but features like glob expansion are not performed.
 
 You can run `cleanup_agent.py` periodically and use `replay_agent.py` for
 session replays.
