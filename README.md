@@ -49,7 +49,8 @@ DATABASE_URL=postgresql://localhost/postgres python workers/executor_agent.py
 Set `COMMAND_TIMEOUT` (seconds) to limit how long each command may run.
 
 You can run `cleanup_agent.py` periodically and use `replay_agent.py` for
-session replays.
+session replays. The optional `monitor_agent.py` emits usage metrics like
+command counts and average run time to stdout or CSV.
 
 ## Serving the HTML UI
 
