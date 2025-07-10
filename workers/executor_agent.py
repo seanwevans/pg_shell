@@ -12,6 +12,7 @@ import select
 import subprocess
 import time
 from typing import Any, Dict
+import logging
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -20,6 +21,7 @@ POLL_INTERVAL = float(os.getenv("POLL_INTERVAL", "1"))
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://localhost/postgres")
 LISTEN_CHANNEL = os.getenv("LISTEN_CHANNEL", "new_command")
 COMMAND_TIMEOUT = int(os.getenv("COMMAND_TIMEOUT", "30"))
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 
 def get_conn():
@@ -54,6 +56,7 @@ def fetch_pending(conn) -> Dict[str, Any] | None:
         row = cur.fetchone()
         if row:
             cur.execute("UPDATE commands SET status='running' WHERE id=%s", (row["id"],))
+            logging.info("Fetched command %s for user %s", row["id"], row["user_id"])
         conn.commit()
         return row
 
@@ -102,6 +105,12 @@ def run_subprocess(command: str, cwd: str, env_snapshot: Any) -> tuple[int, str]
 
 def handle_command(conn, row: Dict[str, Any]) -> None:
     command = row["command"].strip()
+    logging.info(
+        "Executing command %s for user %s: %s",
+        row["id"],
+        row["user_id"],
+        command,
+    )
     if command.startswith("cd "):
         path = command[3:].strip()
         if os.path.isabs(path):
@@ -110,14 +119,39 @@ def handle_command(conn, row: Dict[str, Any]) -> None:
             new_cwd = os.path.normpath(os.path.join(row["cwd_snapshot"], path))
         update_cwd(conn, row["user_id"], new_cwd)
         update_command(conn, row["id"], "done", "", 0)
+        logging.info("Command %s for user %s completed", row["id"], row["user_id"]) 
         return
 
-    exit_code, output = run_subprocess(command, row["cwd_snapshot"], row["env_snapshot"])
+    try:
+        exit_code, output = run_subprocess(
+            command, row["cwd_snapshot"], row["env_snapshot"]
+        )
+    except Exception as exc:
+        logging.exception(
+            "Command %s for user %s failed: %s",
+            row["id"],
+            row["user_id"],
+            exc,
+        )
+        update_command(conn, row["id"], "failed", str(exc), 1)
+        return
+
     status = "done" if exit_code == 0 else "failed"
     update_command(conn, row["id"], status, output, exit_code)
+    if status == "done":
+        logging.info("Command %s for user %s completed", row["id"], row["user_id"])
+    else:
+        logging.error(
+            "Command %s for user %s failed with exit code %s",
+            row["id"],
+            row["user_id"],
+            exit_code,
+        )
 
 
 def main() -> None:
+    level = getattr(logging, LOG_LEVEL, logging.INFO)
+    logging.basicConfig(level=level, format="%(asctime)s %(message)s")
     conn = get_conn()
     setup_listener(conn)
     while True:
