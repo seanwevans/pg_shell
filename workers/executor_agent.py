@@ -98,9 +98,12 @@ def run_subprocess(command: str, cwd: str, env_snapshot: Any) -> tuple[int, str]
             text=True,
             timeout=COMMAND_TIMEOUT,
         )
-        return proc.returncode, proc.stdout
+        output = (proc.stdout or "") + (proc.stderr or "")
+        return proc.returncode, output
     except subprocess.TimeoutExpired as exc:
-        output = exc.stdout or ""
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        output = stdout + stderr
         return 124, f"Timed out after {COMMAND_TIMEOUT}s\n" + output
 
 
