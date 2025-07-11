@@ -38,11 +38,12 @@ def test_submit_and_latest_output(conn):
         cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (user_id, "testuser"))
         cur.execute("SELECT submit_command(%s, %s)", (user_id, "echo hello"))
         cmd_id = cur.fetchone()[0]
-        cur.execute("UPDATE commands SET output='hello', exit_code=0, status='done' WHERE id=%s", (cmd_id,))
+        cur.execute("UPDATE commands SET output='hello', exit_code=0, status='done', completed_at=now() WHERE id=%s", (cmd_id,))
         cur.execute("SELECT * FROM latest_output(%s)", (user_id,))
         row = cur.fetchone()
         assert row[0] == cmd_id
         assert row[2] == 'hello'
+        assert row[6] is not None
 
 
 def test_fork_session(conn):

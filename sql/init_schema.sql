@@ -23,5 +23,6 @@ CREATE TABLE IF NOT EXISTS commands (
   exit_code INT,
   cwd_snapshot TEXT,
   env_snapshot JSONB,
+  completed_at TIMESTAMP,
   CONSTRAINT status_enum CHECK (status IN ('pending','running','done','failed'))
 );
