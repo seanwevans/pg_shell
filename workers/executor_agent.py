@@ -72,7 +72,7 @@ def fetch_pending(conn) -> Dict[str, Any] | None:
 def update_command(conn, cmd_id: int, status: str, output: str, exit_code: int) -> None:
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE commands SET status=%s, output=%s, exit_code=%s WHERE id=%s",
+            "UPDATE commands SET status=%s, output=%s, exit_code=%s, completed_at=now() WHERE id=%s",
             (status, output, exit_code, cmd_id),
         )
     conn.commit()

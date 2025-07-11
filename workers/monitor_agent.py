@@ -36,9 +36,9 @@ def collect_metrics(conn) -> Iterable[Row]:
             SELECT user_id,
                    DATE(submitted_at) AS day,
                    COUNT(*) AS command_count,
-                   AVG(EXTRACT(EPOCH FROM NOW() - submitted_at)) AS avg_seconds
-              FROM commands
-             WHERE status IN ('done', 'failed')
+                   AVG(EXTRACT(EPOCH FROM completed_at - submitted_at)) AS avg_seconds
+             FROM commands
+             WHERE status IN ('done', 'failed') AND completed_at IS NOT NULL
           GROUP BY user_id, day
           ORDER BY day, user_id
             """
