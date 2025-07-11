@@ -4,6 +4,9 @@
 Polls the ``commands`` table for pending commands and executes them. This
 implementation uses ``psycopg2`` and ``subprocess``. It also listens for the
 ``new_command`` channel so commands can run in near real time.
+
+Set ``DATABASE_URL`` or ``PG_CONN`` to the PostgreSQL DSN before running this
+script.
 """
 
 import json
@@ -11,6 +14,7 @@ import os
 import select
 import shlex
 import subprocess
+import sys
 import time
 from typing import Any, Dict
 import logging
@@ -19,14 +23,17 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 POLL_INTERVAL = float(os.getenv("POLL_INTERVAL", "1"))
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://localhost/postgres")
 LISTEN_CHANNEL = os.getenv("LISTEN_CHANNEL", "new_command")
 COMMAND_TIMEOUT = int(os.getenv("COMMAND_TIMEOUT", "30"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 
 def get_conn():
-    return psycopg2.connect(DATABASE_URL)
+    dsn = os.environ.get("DATABASE_URL") or os.environ.get("PG_CONN")
+    if not dsn:
+        logging.error("DATABASE_URL or PG_CONN environment variable required")
+        sys.exit(1)
+    return psycopg2.connect(dsn)
 
 
 def setup_listener(conn):

@@ -44,8 +44,11 @@ pip install -r requirements.txt
 
 **3. Run the executor agent**
 ```bash
+# Either DATABASE_URL or PG_CONN may be used for the PostgreSQL DSN
 DATABASE_URL=postgresql://localhost/postgres python workers/executor_agent.py
 ```
+The executor agent will exit with an error if neither `DATABASE_URL` nor
+`PG_CONN` is set.
 Set `COMMAND_TIMEOUT` (seconds) to limit how long each command may run.
 Commands are parsed with `shlex.split` before execution, so quoting rules follow
 POSIX shells but features like glob expansion are not performed.
