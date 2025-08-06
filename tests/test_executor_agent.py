@@ -37,3 +37,106 @@ def test_handle_command_uses_combined_output(monkeypatch):
     assert captured['status'] == 'failed'
     assert captured['exit_code'] == 1
     assert captured['cmd_id'] == 42
+
+
+def test_handle_command_cd_changes_directory(tmp_path, monkeypatch):
+    captured: dict = {}
+
+    def fake_update_cwd(conn, user_id, cwd):
+        captured['cwd'] = cwd
+
+    def fake_update_command(conn, cmd_id, status, output, exit_code):
+        captured['status'] = status
+        captured['output'] = output
+        captured['exit_code'] = exit_code
+
+    def fake_run_subprocess(*args, **kwargs):  # pragma: no cover - should not run
+        raise AssertionError('run_subprocess should not be called')
+
+    monkeypatch.setattr('workers.executor_agent.update_cwd', fake_update_cwd)
+    monkeypatch.setattr('workers.executor_agent.update_command', fake_update_command)
+    monkeypatch.setattr('workers.executor_agent.run_subprocess', fake_run_subprocess)
+
+    subdir = tmp_path / 'sub'
+    subdir.mkdir()
+    row = {
+        'id': 1,
+        'user_id': 'u1',
+        'command': f'cd {subdir}',
+        'cwd_snapshot': str(tmp_path),
+        'env_snapshot': None,
+    }
+
+    handle_command(None, row)
+
+    assert captured['cwd'] == str(subdir)
+    assert captured['status'] == 'done'
+    assert captured['output'] == ''
+    assert captured['exit_code'] == 0
+
+
+def test_handle_command_cd_nonexistent_path(tmp_path, monkeypatch):
+    captured: dict = {}
+
+    def fake_update_cwd(*args, **kwargs):  # pragma: no cover - should not run
+        raise AssertionError('update_cwd should not be called')
+
+    def fake_update_command(conn, cmd_id, status, output, exit_code):
+        captured['status'] = status
+        captured['output'] = output
+        captured['exit_code'] = exit_code
+
+    def fake_run_subprocess(*args, **kwargs):  # pragma: no cover - should not run
+        raise AssertionError('run_subprocess should not be called')
+
+    monkeypatch.setattr('workers.executor_agent.update_cwd', fake_update_cwd)
+    monkeypatch.setattr('workers.executor_agent.update_command', fake_update_command)
+    monkeypatch.setattr('workers.executor_agent.run_subprocess', fake_run_subprocess)
+
+    row = {
+        'id': 2,
+        'user_id': 'u1',
+        'command': 'cd missing',
+        'cwd_snapshot': str(tmp_path),
+        'env_snapshot': None,
+    }
+
+    handle_command(None, row)
+
+    assert captured['status'] == 'failed'
+    assert captured['exit_code'] == 1
+    assert 'No such file or directory' in captured['output']
+
+
+def test_handle_command_cd_with_extra_args_runs_subprocess(monkeypatch):
+    captured: dict = {}
+
+    def fake_run_subprocess(command, cwd, env):
+        captured['command'] = command
+        return 0, ''
+
+    def fake_update_command(conn, cmd_id, status, output, exit_code):
+        captured['status'] = status
+        captured['output'] = output
+        captured['exit_code'] = exit_code
+
+    def fake_update_cwd(*args, **kwargs):  # pragma: no cover - should not run
+        raise AssertionError('update_cwd should not be called')
+
+    monkeypatch.setattr('workers.executor_agent.run_subprocess', fake_run_subprocess)
+    monkeypatch.setattr('workers.executor_agent.update_command', fake_update_command)
+    monkeypatch.setattr('workers.executor_agent.update_cwd', fake_update_cwd)
+
+    row = {
+        'id': 3,
+        'user_id': 'u1',
+        'command': 'cd /tmp extra',
+        'cwd_snapshot': '.',
+        'env_snapshot': None,
+    }
+
+    handle_command(None, row)
+
+    assert captured['command'] == 'cd /tmp extra'
+    assert captured['status'] == 'done'
+    assert captured['exit_code'] == 0

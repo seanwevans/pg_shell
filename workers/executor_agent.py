@@ -122,15 +122,27 @@ def handle_command(conn, row: Dict[str, Any]) -> None:
         row["user_id"],
         command,
     )
-    if command.startswith("cd "):
-        path = command[3:].strip()
+
+    tokens = shlex.split(command)
+    if len(tokens) == 2 and tokens[0] == "cd":
+        path = tokens[1]
         if os.path.isabs(path):
             new_cwd = os.path.normpath(path)
         else:
             new_cwd = os.path.normpath(os.path.join(row["cwd_snapshot"], path))
+        if not os.path.isdir(new_cwd):
+            error = f"cd: {path}: No such file or directory"
+            update_command(conn, row["id"], "failed", error, 1)
+            logging.error(
+                "Command %s for user %s failed: directory %s not found",
+                row["id"],
+                row["user_id"],
+                path,
+            )
+            return
         update_cwd(conn, row["user_id"], new_cwd)
         update_command(conn, row["id"], "done", "", 0)
-        logging.info("Command %s for user %s completed", row["id"], row["user_id"]) 
+        logging.info("Command %s for user %s completed", row["id"], row["user_id"])
         return
 
     try:
