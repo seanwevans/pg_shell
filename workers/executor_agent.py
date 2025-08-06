@@ -20,6 +20,7 @@ from typing import Any, Dict
 import logging
 
 import psycopg2
+from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 
 POLL_INTERVAL = float(os.getenv("POLL_INTERVAL", "1"))
@@ -38,7 +39,7 @@ def get_conn():
 
 def setup_listener(conn):
     with conn.cursor() as cur:
-        cur.execute("LISTEN %s;" % LISTEN_CHANNEL)
+        cur.execute(sql.SQL("LISTEN {}").format(sql.Identifier(LISTEN_CHANNEL)))
     conn.commit()
 
 
