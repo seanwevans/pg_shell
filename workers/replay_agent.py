@@ -17,31 +17,27 @@ def get_conn():
 
 
 def replay_commands(user_id: str, start_id: int) -> None:
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute(
-        """
-        SELECT id, command
-          FROM commands
-         WHERE user_id = %s AND id >= %s
-      ORDER BY id ASC
-        """,
-        (user_id, start_id),
-    )
-    rows = cur.fetchall()
-    logging.info("Found %d commands to replay", len(rows))
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT id, command
+              FROM commands
+             WHERE user_id = %s AND id >= %s
+          ORDER BY id ASC
+            """,
+            (user_id, start_id),
+        )
+        rows = cur.fetchall()
+        logging.info("Found %d commands to replay", len(rows))
 
-    for row in rows:
-        cmd_id = row["id"]
-        command = row["command"]
-        logging.info("Replaying command %s: %s", cmd_id, command)
-        cur.execute("SELECT submit_command(%s, %s)", (user_id, command))
-        new_id = cur.fetchone()[0]
-        conn.commit()
-        logging.info("Queued as command %s", new_id)
-
-    cur.close()
-    conn.close()
+        for row in rows:
+            cmd_id = row["id"]
+            command = row["command"]
+            logging.info("Replaying command %s: %s", cmd_id, command)
+            cur.execute("SELECT submit_command(%s, %s)", (user_id, command))
+            new_id = cur.fetchone()[0]
+            conn.commit()
+            logging.info("Queued as command %s", new_id)
 
 
 def main() -> None:
