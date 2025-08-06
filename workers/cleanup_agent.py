@@ -44,7 +44,7 @@ def cleanup_once(conn, days: int) -> None:
             cur.execute(
                 """
                 UPDATE environments
-                   SET cwd = '/home/sandbox', env = '{}', updated_at = now()
+                   SET cwd = '/home/sandbox', env = '{}'::jsonb, updated_at = now()
                  WHERE user_id = %s
                 """,
                 (uid,),
