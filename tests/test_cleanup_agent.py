@@ -6,9 +6,11 @@ import psycopg2
 import pytest
 
 from workers.cleanup_agent import cleanup_once
+from workers.db import get_conn
 
 
 INIT_SQL = Path("sql/init_schema.sql").read_text()
+
 
 
 @pytest.fixture(scope="module")
