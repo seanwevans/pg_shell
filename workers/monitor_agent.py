@@ -10,23 +10,13 @@ written to a CSV file.
 import argparse
 import csv
 import logging
-import os
-import sys
 import time
 from typing import Iterable, Tuple
 
-import psycopg2
+from workers.db import get_conn
 
 
 Row = Tuple[str, str, int, float]
-
-
-def get_conn():
-    dsn = os.environ.get("DATABASE_URL") or os.environ.get("PG_CONN")
-    if not dsn:
-        logging.error("DATABASE_URL or PG_CONN environment variable required")
-        sys.exit(1)
-    return psycopg2.connect(dsn)
 
 
 def collect_metrics(conn) -> Iterable[Row]:

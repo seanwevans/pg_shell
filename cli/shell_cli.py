@@ -17,7 +17,9 @@ import requests
 DEFAULT_TIMEOUT = float(os.getenv("PG_SHELL_TIMEOUT", "30"))
 
 
-def exec_command(base_url: str, user_id: str, cmd: str, timeout: float = DEFAULT_TIMEOUT) -> None:
+def exec_command(
+    base_url: str, user_id: str, cmd: str, timeout: float = DEFAULT_TIMEOUT
+) -> int:
     """Submit a command for execution.
 
     Parameters
@@ -33,20 +35,29 @@ def exec_command(base_url: str, user_id: str, cmd: str, timeout: float = DEFAULT
 
     Returns
     -------
-    None
+    int
+        Status code, ``0`` on success, non-zero on failure.
     """
 
-    resp = requests.post(
-        f"{base_url}/rpc/submit_command",
-        json={"user_id": user_id, "command": cmd},
-        timeout=timeout,
-    )
-    resp.raise_for_status()
+    try:
+        resp = requests.post(
+            f"{base_url}/rpc/submit_command",
+            json={"user_id": user_id, "command": cmd},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as exc:  # pragma: no cover - network failure
+        print(f"submit failed: {exc}", file=sys.stderr)
+        return 1
+
     data = resp.json()
     print(data)
+    return 0
 
 
-def fork_session(base_url: str, user_id: str, command_id: int, timeout: float = DEFAULT_TIMEOUT) -> None:
+def fork_session(
+    base_url: str, user_id: str, command_id: int, timeout: float = DEFAULT_TIMEOUT
+) -> int:
     """Create a new session starting from a previous command.
 
     Parameters
@@ -62,20 +73,27 @@ def fork_session(base_url: str, user_id: str, command_id: int, timeout: float = 
 
     Returns
     -------
-    None
+    int
+        Status code, ``0`` on success, non-zero on failure.
     """
 
-    resp = requests.post(
-        f"{base_url}/rpc/fork_session",
-        json={"user_id": user_id, "source_command_id": command_id},
-        timeout=timeout,
-    )
-    resp.raise_for_status()
+    try:
+        resp = requests.post(
+            f"{base_url}/rpc/fork_session",
+            json={"user_id": user_id, "source_command_id": command_id},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as exc:  # pragma: no cover - network failure
+        print(f"fork failed: {exc}", file=sys.stderr)
+        return 1
+
     data = resp.json()
     print(data)
+    return 0
 
 
-def replay_session(base_url: str, session: str, timeout: float = DEFAULT_TIMEOUT) -> None:
+def replay_session(base_url: str, session: str, timeout: float = DEFAULT_TIMEOUT) -> int:
     """Request a replay of a past session.
 
     Parameters
@@ -89,17 +107,24 @@ def replay_session(base_url: str, session: str, timeout: float = DEFAULT_TIMEOUT
 
     Returns
     -------
-    None
+    int
+        Status code, ``0`` on success, non-zero on failure.
     """
 
-    resp = requests.post(
-        f"{base_url}/rpc/replay_session",
-        json={"session": session},
-        timeout=timeout,
-    )
-    resp.raise_for_status()
+    try:
+        resp = requests.post(
+            f"{base_url}/rpc/replay_session",
+            json={"session": session},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as exc:  # pragma: no cover - network failure
+        print(f"replay failed: {exc}", file=sys.stderr)
+        return 1
+
     data = resp.json()
     print(data)
+    return 0
 
 
 def tail_output(
@@ -108,18 +133,31 @@ def tail_output(
     interval: float = 1.0,
     since: int | None = None,
     timeout: float = DEFAULT_TIMEOUT,
-) -> None:
-    """Poll for new output and print it continuously."""
+) -> int:
+    """Poll for new output and print it continuously.
+
+    Returns
+    -------
+    int
+        Status code, ``0`` on success, non-zero on failure.
+    """
     last_id: Any = since
     try:
         while True:
             params = {"user_id": f"eq.{user_id}"}
+
             if last_id is not None:
                 params["since_id"] = last_id
-            resp = requests.get(
-                f"{base_url}/rpc/latest_output", params=params, timeout=timeout
-            )
-            resp.raise_for_status()
+
+            try:
+                resp = requests.get(
+                    f"{base_url}/rpc/latest_output", params=params, timeout=timeout
+                )
+                resp.raise_for_status()
+            except requests.RequestException as exc:  # pragma: no cover - network failure
+                print(f"tail failed: {exc}", file=sys.stderr)
+                return 1
+              
             rows = resp.json()
             for row in rows:
                 print(f"$ {row['command']}")
@@ -130,7 +168,9 @@ def tail_output(
                     last_id = row["id"]
             time.sleep(interval)
     except KeyboardInterrupt:
-        pass
+        return 0
+
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -180,18 +220,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "exec":
-        exec_command(args.base_url, args.user, args.cmd, args.timeout)
+        rc = exec_command(args.base_url, args.user, args.cmd, args.timeout)
     elif args.command == "replay":
-        replay_session(args.base_url, args.session, args.timeout)
+        rc = replay_session(args.base_url, args.session, args.timeout)
     elif args.command == "fork":
-        fork_session(args.base_url, args.user, args.at, args.timeout)
+        rc = fork_session(args.base_url, args.user, args.at, args.timeout)
     elif args.command == "tail":
-        tail_output(args.base_url, args.user, args.interval, args.since, args.timeout)
+        rc = tail_output(
+            args.base_url, args.user, args.interval, args.since, args.timeout
+        )
     else:
         parser.print_help()
         return 1
 
-    return 0
+    return rc
 
 
 if __name__ == "__main__":

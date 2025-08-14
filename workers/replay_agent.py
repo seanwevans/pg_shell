@@ -1,19 +1,10 @@
 #!/usr/bin/env python3
 import argparse
 import logging
-import os
-import sys
 
-import psycopg2
 from psycopg2.extras import RealDictCursor
 
-
-def get_conn():
-    dsn = os.environ.get("DATABASE_URL") or os.environ.get("PG_CONN")
-    if not dsn:
-        logging.error("DATABASE_URL or PG_CONN environment variable required")
-        sys.exit(1)
-    return psycopg2.connect(dsn)
+from workers.db import get_conn
 
 
 def replay_commands(user_id: str, start_id: int) -> None:
