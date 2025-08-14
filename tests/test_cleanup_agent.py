@@ -1,8 +1,10 @@
 import subprocess
 import uuid
-import psycopg2
+
+import pytest
 
 from workers.cleanup_agent import cleanup_once
+from workers.db import get_conn
 
 
 def init_db(conn):
@@ -20,13 +22,17 @@ def init_db(conn):
     conn.commit()
 
 
-def test_cleanup_once_resets_env():
+def test_cleanup_once_resets_env(monkeypatch):
     subprocess.run(["service", "postgresql", "start"], check=False)
     subprocess.run(
         ["sudo", "-u", "postgres", "createdb", "-O", "root", "pgshell_test"],
         check=False,
     )
-    conn = psycopg2.connect(dbname="pgshell_test", user="root")
+    monkeypatch.setenv("PG_CONN", "dbname=pgshell_test user=root")
+    try:
+        conn = get_conn()
+    except SystemExit:
+        pytest.skip("PostgreSQL not available")
     init_db(conn)
     uid_str = str(uuid.uuid4())
     with conn.cursor() as cur:
