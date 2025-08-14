@@ -65,3 +65,22 @@ def test_fork_session(conn):
         cur.execute("SELECT cwd FROM environments WHERE user_id=%s", (user_id,))
         cwd = cur.fetchone()[0]
         assert cwd == '/home/start'
+
+
+def test_latest_output_since_id(conn):
+    user_id = str(uuid.uuid4())
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (user_id, "u3"))
+        ids = []
+        for cmd in ("echo one", "echo two", "echo three"):
+            cur.execute("SELECT submit_command(%s, %s)", (user_id, cmd))
+            cmd_id = cur.fetchone()[0]
+            cur.execute(
+                "UPDATE commands SET output=%s, exit_code=0, status='done', completed_at=now() WHERE id=%s",
+                (cmd.split()[1], cmd_id),
+            )
+            ids.append(cmd_id)
+        cur.execute("SELECT * FROM latest_output(%s, %s)", (user_id, ids[1]))
+        rows = cur.fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] == ids[2]

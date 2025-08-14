@@ -114,17 +114,19 @@ def tail_output(
     try:
         while True:
             params = {"user_id": f"eq.{user_id}"}
+            if last_id is not None:
+                params["since_id"] = last_id
             resp = requests.get(
                 f"{base_url}/rpc/latest_output", params=params, timeout=timeout
             )
             resp.raise_for_status()
             rows = resp.json()
             for row in rows:
+                print(f"$ {row['command']}")
+                if row.get('output'):
+                    print(row['output'])
+                print(f"(exit {row.get('exit_code')})")
                 if last_id is None or row["id"] > last_id:
-                    print(f"$ {row['command']}")
-                    if row.get('output'):
-                        print(row['output'])
-                    print(f"(exit {row.get('exit_code')})")
                     last_id = row["id"]
             time.sleep(interval)
     except KeyboardInterrupt:
