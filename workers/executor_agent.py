@@ -14,27 +14,19 @@ import os
 import select
 import shlex
 import subprocess
-import sys
 import time
 from typing import Any, Dict
 import logging
 
-import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
+
+from workers.db import get_conn
 
 POLL_INTERVAL = float(os.getenv("POLL_INTERVAL", "1"))
 LISTEN_CHANNEL = os.getenv("LISTEN_CHANNEL", "new_command")
 COMMAND_TIMEOUT = int(os.getenv("COMMAND_TIMEOUT", "30"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-
-
-def get_conn():
-    dsn = os.environ.get("DATABASE_URL") or os.environ.get("PG_CONN")
-    if not dsn:
-        logging.error("DATABASE_URL or PG_CONN environment variable required")
-        sys.exit(1)
-    return psycopg2.connect(dsn)
 
 
 def setup_listener(conn):
