@@ -169,13 +169,16 @@ def main() -> None:
     level = getattr(logging, LOG_LEVEL, logging.INFO)
     logging.basicConfig(level=level, format="%(asctime)s %(message)s")
     conn = get_conn()
-    setup_listener(conn)
-    while True:
-        row = fetch_pending(conn)
-        if row:
-            handle_command(conn, row)
-            continue
-        wait_for_notify(conn, POLL_INTERVAL)
+    try:
+        setup_listener(conn)
+        while True:
+            row = fetch_pending(conn)
+            if row:
+                handle_command(conn, row)
+                continue
+            wait_for_notify(conn, POLL_INTERVAL)
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
