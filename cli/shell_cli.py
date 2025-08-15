@@ -144,10 +144,10 @@ def tail_output(
     last_id: Any = since
     try:
         while True:
-            params = {"user_id": f"eq.{user_id}"}
+            params = {"p_user_id": f"eq.{user_id}"}
 
             if last_id is not None:
-                params["since_id"] = last_id
+                params["p_since_id"] = last_id
 
             try:
                 resp = requests.get(
