@@ -68,7 +68,11 @@ def main() -> None:
             csv_writer.writerow(["user_id", "day", "command_count", "avg_seconds"])
 
     while True:
-        conn = get_conn()
+        try:
+            conn = get_conn()
+        except RuntimeError as exc:
+            logging.error("Monitor agent failed to connect to database: %s", exc)
+            break
         try:
             rows = collect_metrics(conn)
             output_metrics(rows, csv_writer)

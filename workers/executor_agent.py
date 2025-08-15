@@ -168,7 +168,11 @@ def handle_command(conn, row: Dict[str, Any]) -> None:
 def main() -> None:
     level = getattr(logging, LOG_LEVEL, logging.INFO)
     logging.basicConfig(level=level, format="%(asctime)s %(message)s")
-    conn = get_conn()
+    try:
+        conn = get_conn()
+    except RuntimeError as exc:
+        logging.error("Executor agent failed to connect to database: %s", exc)
+        return
     setup_listener(conn)
     while True:
         row = fetch_pending(conn)
