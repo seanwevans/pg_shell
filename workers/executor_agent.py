@@ -168,6 +168,7 @@ def handle_command(conn, row: Dict[str, Any]) -> None:
 def main() -> None:
     level = getattr(logging, LOG_LEVEL, logging.INFO)
     logging.basicConfig(level=level, format="%(asctime)s %(message)s")
+
     conn = get_conn()
     try:
         setup_listener(conn)

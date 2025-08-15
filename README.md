@@ -41,6 +41,11 @@ The frontend is a simple HTML+htmx app; no JavaScript-heavy terminal emulators, 
 ```bash
 pip install -r requirements.txt
 ```
+The `requirements.txt` file pins the following versions:
+
+- `pytest==8.4.1`
+- `psycopg2-binary==2.9.10`
+- `requests==2.32.4`
 
 **3. Run the executor agent**
 ```bash

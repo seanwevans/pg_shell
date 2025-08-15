@@ -62,7 +62,11 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     while True:
-        conn = get_conn()
+        try:
+            conn = get_conn()
+        except RuntimeError as exc:
+            logging.error("Cleanup agent failed to connect to database: %s", exc)
+            break
         try:
             cleanup_once(conn, args.days)
         finally:
