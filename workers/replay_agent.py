@@ -39,7 +39,10 @@ def main() -> None:
     )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    replay_commands(args.user, args.start)
+    try:
+        replay_commands(args.user, args.start)
+    except RuntimeError as exc:
+        logging.error("Replay agent failed to connect to database: %s", exc)
 
 
 if __name__ == "__main__":

@@ -75,6 +75,7 @@ def main() -> None:
             time.sleep(args.interval)
 
     if args.csv:
+
         with open(args.csv, "a", newline="") as csv_file:
             csv_writer = csv.writer(csv_file)
             if csv_file.tell() == 0:
@@ -82,7 +83,6 @@ def main() -> None:
             run_loop(csv_writer)
     else:
         run_loop(None)
-
 
 if __name__ == "__main__":
     main()
