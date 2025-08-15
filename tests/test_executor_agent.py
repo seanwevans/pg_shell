@@ -1,3 +1,5 @@
+import pytest
+import workers.executor_agent
 from workers.executor_agent import run_subprocess, handle_command
 
 
@@ -140,3 +142,28 @@ def test_handle_command_cd_with_extra_args_runs_subprocess(monkeypatch):
     assert captured['command'] == 'cd /tmp extra'
     assert captured['status'] == 'done'
     assert captured['exit_code'] == 0
+
+
+def test_main_closes_connection_on_keyboard_interrupt(monkeypatch):
+    closed = False
+
+    class FakeConn:
+        def close(self):
+            nonlocal closed
+            closed = True
+
+    def fake_get_conn():
+        return FakeConn()
+
+    def fake_fetch_pending(conn):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr('workers.executor_agent.get_conn', fake_get_conn)
+    monkeypatch.setattr('workers.executor_agent.setup_listener', lambda conn: None)
+    monkeypatch.setattr('workers.executor_agent.fetch_pending', fake_fetch_pending)
+    monkeypatch.setattr('workers.executor_agent.wait_for_notify', lambda conn, timeout: None)
+
+    with pytest.raises(KeyboardInterrupt):
+        workers.executor_agent.main()
+
+    assert closed
