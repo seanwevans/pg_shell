@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """pg_shell monitor agent.
 
 Collects usage statistics from the ``commands`` table. Metrics include
@@ -59,33 +61,28 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
-    csv_writer = None
-    csv_file = None
-    if args.csv:
-        csv_file = open(args.csv, "a", newline="")
-        csv_writer = csv.writer(csv_file)
-        if csv_file.tell() == 0:
-            csv_writer.writerow(["user_id", "day", "command_count", "avg_seconds"])
-
-    while True:
-        try:
+    def run_loop(csv_writer: csv.writer | None) -> None:
+        while True:
             conn = get_conn()
-        except RuntimeError as exc:
-            logging.error("Monitor agent failed to connect to database: %s", exc)
-            break
-        try:
-            rows = collect_metrics(conn)
-            output_metrics(rows, csv_writer)
-        finally:
-            conn.close()
+            try:
+                rows = collect_metrics(conn)
+                output_metrics(rows, csv_writer)
+            finally:
+                conn.close()
 
-        if args.once:
-            break
-        time.sleep(args.interval)
+            if args.once:
+                break
+            time.sleep(args.interval)
 
-    if csv_file:
-        csv_file.close()
+    if args.csv:
 
+        with open(args.csv, "a", newline="") as csv_file:
+            csv_writer = csv.writer(csv_file)
+            if csv_file.tell() == 0:
+                csv_writer.writerow(["user_id", "day", "command_count", "avg_seconds"])
+            run_loop(csv_writer)
+    else:
+        run_loop(None)
 
 if __name__ == "__main__":
     main()
