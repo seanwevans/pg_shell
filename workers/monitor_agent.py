@@ -61,17 +61,24 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
-    def run_loop(csv_writer: csv.writer | None) -> None:
+    def run_loop(csv_writer: csv.writer | None) -> int:
         while True:
-            conn = get_conn()
             try:
-                rows = collect_metrics(conn)
-                output_metrics(rows, csv_writer)
-            finally:
-                conn.close()
+                conn = get_conn()
+                try:
+                    rows = collect_metrics(conn)
+                    output_metrics(rows, csv_writer)
+                finally:
+                    conn.close()
+            except RuntimeError as exc:
+                logging.error("Error collecting metrics: %s", exc)
+                if args.once:
+                    return 1
+                time.sleep(args.interval)
+                continue
 
             if args.once:
-                break
+                return 0
             time.sleep(args.interval)
 
     if args.csv:
@@ -80,9 +87,9 @@ def main() -> None:
             csv_writer = csv.writer(csv_file)
             if csv_file.tell() == 0:
                 csv_writer.writerow(["user_id", "day", "command_count", "avg_seconds"])
-            run_loop(csv_writer)
+            return run_loop(csv_writer)
     else:
-        run_loop(None)
+        return run_loop(None)
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
