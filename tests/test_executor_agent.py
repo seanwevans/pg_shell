@@ -11,6 +11,24 @@ def test_run_subprocess_combines_output(tmp_path):
     assert "err" in output
 
 
+def test_run_subprocess_truncates_output(monkeypatch, tmp_path):
+    monkeypatch.setattr(workers.executor_agent, "MAX_OUTPUT_BYTES", 100)
+    cmd = "python3 -c 'import sys;sys.stdout.write(\"a\"*200)'"
+    exit_code, output = run_subprocess(cmd, str(tmp_path), None)
+    assert exit_code == 0
+    assert output.endswith("...[truncated]")
+    assert output.startswith("a" * 100)
+    assert len(output) == 100 + len("...[truncated]")
+
+
+def test_run_subprocess_preserves_exit_code(monkeypatch, tmp_path):
+    monkeypatch.setattr(workers.executor_agent, "MAX_OUTPUT_BYTES", 50)
+    cmd = "python3 -c 'import sys;sys.stdout.write(\"b\"*100);sys.exit(3)'"
+    exit_code, output = run_subprocess(cmd, str(tmp_path), None)
+    assert exit_code == 3
+    assert output.endswith("...[truncated]")
+
+
 def test_handle_command_uses_combined_output(monkeypatch):
     captured = {}
 
