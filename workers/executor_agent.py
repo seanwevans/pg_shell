@@ -27,6 +27,8 @@ POLL_INTERVAL = float(os.getenv("POLL_INTERVAL", "1"))
 LISTEN_CHANNEL = os.getenv("LISTEN_CHANNEL", "new_command")
 COMMAND_TIMEOUT = int(os.getenv("COMMAND_TIMEOUT", "30"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+MAX_OUTPUT_BYTES = int(os.getenv("MAX_OUTPUT_BYTES", "65536"))
+TRUNCATION_SUFFIX = "...[truncated]"
 
 
 def setup_listener(conn):
@@ -89,22 +91,49 @@ def run_subprocess(command: str, cwd: str, env_snapshot: Any) -> tuple[int, str]
             env.update(env_snapshot)
 
     cmd_list = shlex.split(command)
-    try:
-        proc = subprocess.run(
-            cmd_list,
-            cwd=cwd,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=COMMAND_TIMEOUT,
-        )
-        output = (proc.stdout or "") + (proc.stderr or "")
-        return proc.returncode, output
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout or ""
-        stderr = exc.stderr or ""
-        output = stdout + stderr
-        return 124, f"Timed out after {COMMAND_TIMEOUT}s\n" + output
+    proc = subprocess.Popen(
+        cmd_list,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    deadline = time.time() + COMMAND_TIMEOUT
+    output = bytearray()
+    limit_exceeded = False
+    timed_out = False
+    fds = [proc.stdout, proc.stderr]
+
+    while fds:
+        if time.time() > deadline and not timed_out:
+            proc.kill()
+            timed_out = True
+        ready, _, _ = select.select(fds, [], [], 0.1)
+        for fd in ready:
+            chunk = fd.read1(4096)
+            if not chunk:
+                fds.remove(fd)
+                continue
+            if len(output) < MAX_OUTPUT_BYTES:
+                remaining = MAX_OUTPUT_BYTES - len(output)
+                if len(chunk) > remaining:
+                    output.extend(chunk[:remaining])
+                    limit_exceeded = True
+                else:
+                    output.extend(chunk)
+            else:
+                limit_exceeded = True
+
+    proc.wait()
+    exit_code = proc.returncode
+    text = output.decode(errors="replace")
+    if timed_out:
+        exit_code = 124
+        text = f"Timed out after {COMMAND_TIMEOUT}s\n" + text
+    if limit_exceeded:
+        text += TRUNCATION_SUFFIX
+    return exit_code, text
 
 
 def handle_command(conn, row: Dict[str, Any]) -> None:
@@ -115,8 +144,18 @@ def handle_command(conn, row: Dict[str, Any]) -> None:
         row["user_id"],
         command,
     )
+    try:
+        tokens = shlex.split(command)
+    except ValueError as exc:
+        logging.error(
+            "Command %s for user %s failed: %s",
+            row["id"],
+            row["user_id"],
+            exc,
+        )
+        update_command(conn, row["id"], "failed", str(exc), 1)
+        return
 
-    tokens = shlex.split(command)
     if len(tokens) == 2 and tokens[0] == "cd":
         path = tokens[1]
         if os.path.isabs(path):
