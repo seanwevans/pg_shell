@@ -18,17 +18,25 @@ def replay_commands(user_id: str, start_id: int) -> None:
             """,
             (user_id, start_id),
         )
-        rows = cur.fetchall()
-        logging.info("Found %d commands to replay", len(rows))
-
-        for row in rows:
-            cmd_id = row["id"]
-            command = row["command"]
-            logging.info("Replaying command %s: %s", cmd_id, command)
-            cur.execute("SELECT submit_command(%s, %s)", (user_id, command))
-            new_id = cur.fetchone()[0]
-            conn.commit()
-            logging.info("Queued as command %s", new_id)
+        batch_size = 100
+        total = 0
+        while True:
+            rows = cur.fetchmany(batch_size)
+            if not rows:
+                break
+            for row in rows:
+                cmd_id = row["id"]
+                command = row["command"]
+                logging.info("Replaying command %s: %s", cmd_id, command)
+                cur.execute("SELECT submit_command(%s, %s)", (user_id, command))
+                new_id = cur.fetchone()[0]
+                conn.commit()
+                logging.info("Queued as command %s", new_id)
+                total += 1
+        if total == 0:
+            logging.info("no commands to replay")
+        else:
+            logging.info("Replayed %d commands", total)
 
 
 def main() -> None:
