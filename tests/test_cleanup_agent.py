@@ -1,5 +1,6 @@
 import os
 import uuid
+import logging
 from pathlib import Path
 
 import psycopg2
@@ -51,4 +52,31 @@ def test_cleanup_once_resets_env(conn):
 
     assert cwd == '/home/sandbox'
     assert env == {}
+
+
+def test_cleanup_once_resets_multiple_envs(conn, caplog):
+    ids = [str(uuid.uuid4()) for _ in range(2)]
+    with conn.cursor() as cur:
+        for uid in ids:
+            cur.execute("INSERT INTO users (id, username) VALUES (%s, %s)", (uid, "user"))
+            cur.execute(
+                "INSERT INTO environments (user_id, cwd, env, updated_at) VALUES (%s, %s, %s::jsonb, now() - interval '100 days')",
+                (uid, '/tmp', '{"k":1}')
+            )
+            cur.execute(
+                "INSERT INTO commands (user_id, command, submitted_at, status) VALUES (%s, 'ls', now() - interval '100 days', 'done')",
+                (uid,)
+            )
+    caplog.set_level(logging.INFO)
+    cleanup_once(conn, 90)
+    assert "Reset 2 stale environments" in caplog.text
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT cwd, env FROM environments WHERE user_id = ANY(%s) ORDER BY user_id",
+            (ids,)
+        )
+        rows = cur.fetchall()
+    for cwd, env in rows:
+        assert cwd == '/home/sandbox'
+        assert env == {}
 

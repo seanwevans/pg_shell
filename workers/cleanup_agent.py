@@ -24,22 +24,14 @@ def cleanup_once(conn, days: int) -> None:
 
         cur.execute(
             """
-            SELECT user_id FROM environments
+            UPDATE environments
+               SET cwd = '/home/sandbox', env = '{}'::jsonb, updated_at = now()
              WHERE updated_at < now() - %s * interval '1 day'
             """,
             (days,),
         )
-        user_ids = [r[0] for r in cur.fetchall()]
-        for uid in user_ids:
-            logging.info("Resetting environment for user %s", uid)
-            cur.execute(
-                """
-                UPDATE environments
-                   SET cwd = '/home/sandbox', env = '{}'::jsonb, updated_at = now()
-                 WHERE user_id = %s
-                """,
-                (uid,),
-            )
+        reset = cur.rowcount
+        logging.info("Reset %d stale environments", reset)
     conn.commit()
 
 
