@@ -144,6 +144,39 @@ def test_handle_command_cd_with_extra_args_runs_subprocess(monkeypatch):
     assert captured['exit_code'] == 0
 
 
+def test_handle_command_malformed_command(monkeypatch):
+    captured: dict = {}
+
+    def fake_update_command(conn, cmd_id, status, output, exit_code):
+        captured['status'] = status
+        captured['output'] = output
+        captured['exit_code'] = exit_code
+
+    def fake_run_subprocess(*args, **kwargs):  # pragma: no cover - should not run
+        raise AssertionError('run_subprocess should not be called')
+
+    def fake_update_cwd(*args, **kwargs):  # pragma: no cover - should not run
+        raise AssertionError('update_cwd should not be called')
+
+    monkeypatch.setattr('workers.executor_agent.update_command', fake_update_command)
+    monkeypatch.setattr('workers.executor_agent.run_subprocess', fake_run_subprocess)
+    monkeypatch.setattr('workers.executor_agent.update_cwd', fake_update_cwd)
+
+    row = {
+        'id': 4,
+        'user_id': 'u1',
+        'command': 'echo "unterminated',
+        'cwd_snapshot': '.',
+        'env_snapshot': None,
+    }
+
+    handle_command(None, row)
+
+    assert captured['status'] == 'failed'
+    assert captured['exit_code'] == 1
+    assert 'No closing quotation' in captured['output']
+
+
 def test_main_closes_connection_on_keyboard_interrupt(monkeypatch):
     closed = False
 
