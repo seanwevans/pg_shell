@@ -133,6 +133,7 @@ def tail_output(
     interval: float = 1.0,
     since: int | None = None,
     timeout: float = DEFAULT_TIMEOUT,
+    max_polls: int | None = None,
 ) -> int:
     """Poll for new output and print it continuously.
 
@@ -141,7 +142,11 @@ def tail_output(
     int
         Status code, ``0`` on success, non-zero on failure.
     """
+    if max_polls is not None and max_polls <= 0:
+        return 0
+
     last_id: Any = since
+    polls_remaining = max_polls
     try:
         while True:
             params = {"p_user_id": f"eq.{user_id}"}
@@ -157,7 +162,7 @@ def tail_output(
             except requests.RequestException as exc:  # pragma: no cover - network failure
                 print(f"tail failed: {exc}", file=sys.stderr)
                 return 1
-              
+
             rows = resp.json()
             for row in rows:
                 print(f"$ {row['command']}")
@@ -166,6 +171,12 @@ def tail_output(
                 print(f"(exit {row.get('exit_code')})")
                 if last_id is None or row["id"] > last_id:
                     last_id = row["id"]
+
+            if polls_remaining is not None:
+                polls_remaining -= 1
+                if polls_remaining <= 0:
+                    break
+
             time.sleep(interval)
     except KeyboardInterrupt:
         return 0
@@ -216,6 +227,7 @@ def main(argv: list[str] | None = None) -> int:
     tail_p.add_argument("--user", required=True, help="User ID")
     tail_p.add_argument("--interval", type=float, default=1.0, help="Polling interval seconds")
     tail_p.add_argument("--since", type=int, help="Start tailing after this command ID")
+    tail_p.add_argument("--max-polls", type=int, help="Maximum number of polls before exiting")
 
     args = parser.parse_args(argv)
 
@@ -227,7 +239,12 @@ def main(argv: list[str] | None = None) -> int:
         rc = fork_session(args.base_url, args.user, args.at, args.timeout)
     elif args.command == "tail":
         rc = tail_output(
-            args.base_url, args.user, args.interval, args.since, args.timeout
+            args.base_url,
+            args.user,
+            args.interval,
+            args.since,
+            args.timeout,
+            args.max_polls,
         )
     else:
         parser.print_help()
