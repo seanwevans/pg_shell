@@ -13,7 +13,7 @@ import argparse
 import csv
 import logging
 import time
-from typing import Iterable, Tuple
+from typing import Iterator, Tuple
 
 from workers.db import get_conn
 
@@ -21,8 +21,9 @@ from workers.db import get_conn
 Row = Tuple[str, str, int, float]
 
 
-def collect_metrics(conn) -> Iterable[Row]:
-    with conn.cursor() as cur:
+def collect_metrics(conn) -> Iterator[Row]:
+    """Yield metric rows one by one using a server-side cursor."""
+    with conn.cursor(name="monitor_agent_metrics") as cur:
         cur.execute(
             """
             SELECT user_id,
@@ -35,10 +36,11 @@ def collect_metrics(conn) -> Iterable[Row]:
           ORDER BY day, user_id
             """
         )
-        return cur.fetchall()
+        for row in iter(cur.fetchone, None):
+            yield row
 
 
-def output_metrics(rows: Iterable[Row], csv_writer: csv.writer | None) -> None:
+def output_metrics(rows: Iterator[Row], csv_writer: csv.writer | None) -> None:
     for row in rows:
         user_id, day, count, avg_seconds = row
         avg_seconds = round(avg_seconds or 0.0, 3)
@@ -64,18 +66,9 @@ def main() -> None:
     def run_loop(csv_writer: csv.writer | None) -> int:
         while True:
             try:
-                conn = get_conn()
-                try:
-                    rows = collect_metrics(conn)
-                    output_metrics(rows, csv_writer)
-                finally:
-                    conn.close()
-            except RuntimeError as exc:
-                logging.error("Error collecting metrics: %s", exc)
-                if args.once:
-                    return 1
-                time.sleep(args.interval)
-                continue
+                output_metrics(collect_metrics(conn), csv_writer)
+            finally:
+                conn.close()
 
             if args.once:
                 return 0
