@@ -115,8 +115,18 @@ def handle_command(conn, row: Dict[str, Any]) -> None:
         row["user_id"],
         command,
     )
+    try:
+        tokens = shlex.split(command)
+    except ValueError as exc:
+        logging.error(
+            "Command %s for user %s failed: %s",
+            row["id"],
+            row["user_id"],
+            exc,
+        )
+        update_command(conn, row["id"], "failed", str(exc), 1)
+        return
 
-    tokens = shlex.split(command)
     if len(tokens) == 2 and tokens[0] == "cd":
         path = tokens[1]
         if os.path.isabs(path):
