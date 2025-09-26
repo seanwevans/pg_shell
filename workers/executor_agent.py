@@ -10,30 +10,83 @@ script.
 """
 
 import json
+import logging
 import os
 import select
 import shlex
 import subprocess
 import time
 from typing import Any, Dict
-import logging
 
-from psycopg2 import sql
+from psycopg2 import sql, errors
 from psycopg2.extras import RealDictCursor
 
 from workers.db import get_conn
 
 POLL_INTERVAL = float(os.getenv("POLL_INTERVAL", "1"))
-LISTEN_CHANNEL = os.getenv("LISTEN_CHANNEL", "new_command")
+DEFAULT_LISTEN_CHANNEL = "new_command"
+LISTEN_CHANNEL_ENV = os.getenv("LISTEN_CHANNEL")
+LISTEN_CHANNEL = LISTEN_CHANNEL_ENV or DEFAULT_LISTEN_CHANNEL
 COMMAND_TIMEOUT = int(os.getenv("COMMAND_TIMEOUT", "30"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 MAX_OUTPUT_BYTES = int(os.getenv("MAX_OUTPUT_BYTES", "65536"))
 TRUNCATION_SUFFIX = "...[truncated]"
 
 
+def _update_channel_config(conn, channel: str) -> None:
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO pg_shell_config(key, value)
+                VALUES ('listen_channel', %s)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+                """,
+                (channel,),
+            )
+    except errors.UndefinedTable:
+        if not conn.autocommit:
+            conn.rollback()
+        logging.warning(
+            "pg_shell_config table missing when updating listen channel; using %s",
+            channel,
+        )
+
+
+def _fetch_channel_from_config(conn) -> str:
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT value FROM pg_shell_config WHERE key = %s",
+                ("listen_channel",),
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                return row[0]
+    except errors.UndefinedTable:
+        if not conn.autocommit:
+            conn.rollback()
+        logging.warning(
+            "pg_shell_config table missing when fetching listen channel; using default",
+        )
+    return DEFAULT_LISTEN_CHANNEL
+
+
+def resolve_listen_channel(conn) -> str:
+    global LISTEN_CHANNEL
+    if LISTEN_CHANNEL_ENV:
+        channel = LISTEN_CHANNEL_ENV
+        _update_channel_config(conn, channel)
+    else:
+        channel = _fetch_channel_from_config(conn)
+    LISTEN_CHANNEL = channel
+    return channel
+
+
 def setup_listener(conn):
+    channel = resolve_listen_channel(conn)
     with conn.cursor() as cur:
-        cur.execute(sql.SQL("LISTEN {}").format(sql.Identifier(LISTEN_CHANNEL)))
+        cur.execute(sql.SQL("LISTEN {}").format(sql.Identifier(channel)))
     conn.commit()
 
 

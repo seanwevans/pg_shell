@@ -1,15 +1,39 @@
 import json
 import os
+import select
+import time
 import uuid
 from pathlib import Path
 
 import psycopg2
+from psycopg2 import sql
 import pytest
 
-INIT_SQL = Path('sql/init_schema.sql').read_text()
-SUBMIT_SQL = Path('sql/submit_command.sql').read_text()
-LATEST_SQL = Path('sql/latest_output.sql').read_text()
-FORK_SQL = Path('sql/fork_session.sql').read_text()
+INSTALL_SCRIPT = Path('sql/install.sql').read_text()
+
+
+def run_install(cur):
+    for raw_line in INSTALL_SCRIPT.splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("--"):
+            continue
+        if stripped.startswith("\\i"):
+            include = stripped[2:].strip().split()[0]
+            sql_text = Path(include).read_text()
+            cur.execute(sql_text)
+
+
+def wait_for_notification(conn, timeout: float = 2.0):
+    deadline = time.monotonic() + timeout
+    while True:
+        conn.poll()
+        if conn.notifies:
+            return conn.notifies.pop(0)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        select.select([conn], [], [], min(0.1, remaining))
+    return None
 
 
 def _collect_index_names(plan_node):
@@ -43,15 +67,16 @@ def conn():
     conn = psycopg2.connect(dsn)
     conn.autocommit = True
     cur = conn.cursor()
-    cur.execute("DROP TABLE IF EXISTS commands, environments, users CASCADE;")
-    cur.execute(INIT_SQL)
-    cur.execute(SUBMIT_SQL)
-    cur.execute(LATEST_SQL)
-    cur.execute(FORK_SQL)
+    cur.execute(
+        "DROP TABLE IF EXISTS commands, environments, users, pg_shell_config CASCADE;"
+    )
+    run_install(cur)
     cur.close()
     yield conn
     cur = conn.cursor()
-    cur.execute("DROP TABLE commands, environments, users CASCADE;")
+    cur.execute(
+        "DROP TABLE commands, environments, users, pg_shell_config CASCADE;"
+    )
     cur.close()
     conn.close()
 
@@ -68,6 +93,53 @@ def test_submit_and_latest_output(conn):
         assert row[0] == cmd_id
         assert row[2] == 'hello'
         assert row[6] is not None
+
+
+def test_submit_command_notifies(conn):
+    user_id = str(uuid.uuid4())
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (user_id, "notify"))
+        cur.execute("LISTEN new_command;")
+    conn.notifies.clear()
+    with conn.cursor() as cur:
+        cur.execute("SELECT submit_command(%s, %s)", (user_id, "echo ping"))
+        cmd_id = cur.fetchone()[0]
+    notification = wait_for_notification(conn)
+    with conn.cursor() as cur:
+        cur.execute("UNLISTEN *;")
+    assert notification is not None
+    assert notification.channel == 'new_command'
+    assert notification.payload == str(cmd_id)
+
+
+def test_submit_command_respects_configured_channel(conn):
+    user_id = str(uuid.uuid4())
+    alt_channel = 'custom_command_channel'
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (user_id, "config"))
+        cur.execute(
+            """
+            INSERT INTO pg_shell_config(key, value)
+            VALUES ('listen_channel', %s)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """,
+            (alt_channel,),
+        )
+        cur.execute("UNLISTEN *;")
+        cur.execute(sql.SQL("LISTEN {}").format(sql.Identifier(alt_channel)))
+    conn.notifies.clear()
+    with conn.cursor() as cur:
+        cur.execute("SELECT submit_command(%s, %s)", (user_id, "echo config"))
+        cmd_id = cur.fetchone()[0]
+    notification = wait_for_notification(conn)
+    with conn.cursor() as cur:
+        cur.execute("UNLISTEN *;")
+        cur.execute(
+            "UPDATE pg_shell_config SET value='new_command' WHERE key='listen_channel'"
+        )
+    assert notification is not None
+    assert notification.channel == alt_channel
+    assert notification.payload == str(cmd_id)
 
 
 def test_fork_session(conn):

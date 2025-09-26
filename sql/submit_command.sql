@@ -6,6 +6,7 @@ RETURNS INTEGER LANGUAGE plpgsql AS $$
 DECLARE
   env_row environments%ROWTYPE;
   new_id INTEGER;
+  channel TEXT;
 BEGIN
   -- ensure environment row exists
   SELECT * INTO env_row FROM environments WHERE user_id = p_user_id;
@@ -17,6 +18,9 @@ BEGIN
   INSERT INTO commands(user_id, command, cwd_snapshot, env_snapshot)
     VALUES (p_user_id, p_command, env_row.cwd, env_row.env)
     RETURNING id INTO new_id;
+
+  SELECT value INTO channel FROM pg_shell_config WHERE key = 'listen_channel';
+  PERFORM pg_notify(COALESCE(channel, 'new_command'), new_id::text);
 
   RETURN new_id;
 END;
