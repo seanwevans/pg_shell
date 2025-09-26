@@ -33,7 +33,13 @@ CREATE TABLE commands (
   env_snapshot JSONB,
   CONSTRAINT status_enum CHECK (status IN ('pending','running','done','failed'))
 );
+
+CREATE INDEX commands_status_submitted_at_idx ON commands (status, submitted_at);
+CREATE INDEX commands_user_id_id_idx ON commands (user_id, id);
 ```
+
+- `commands_status_submitted_at_idx` keeps executor polling queries (`WHERE status='pending' ORDER BY submitted_at`) using an index-only scan.
+- `commands_user_id_id_idx` accelerates user-specific history queries (e.g., fetch latest command id) without scanning unrelated rows.
 
 ---
 

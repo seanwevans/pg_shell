@@ -26,3 +26,9 @@ CREATE TABLE IF NOT EXISTS commands (
   completed_at TIMESTAMP,
   CONSTRAINT status_enum CHECK (status IN ('pending','running','done','failed'))
 );
+
+CREATE INDEX IF NOT EXISTS commands_status_submitted_at_idx
+  ON commands (status, submitted_at);
+
+CREATE INDEX IF NOT EXISTS commands_user_id_id_idx
+  ON commands (user_id, id);
