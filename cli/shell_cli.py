@@ -14,6 +14,36 @@ from typing import Any
 import requests
 
 
+_POST_HEADERS = {
+    "Prefer": "return=representation",
+    "Accept": "application/json",
+}
+
+
+def _print_response(resp: requests.Response) -> None:
+    """Print JSON if present, otherwise fall back to text or status."""
+
+    try:
+        data = resp.json()
+    except ValueError:
+        body = getattr(resp, "text", "")
+        body = body.strip()
+        if body:
+            print(body)
+            return
+
+        status_code = getattr(resp, "status_code", "")
+        reason = getattr(resp, "reason", "")
+        if status_code and reason:
+            print(f"{status_code} {reason}")
+        elif status_code:
+            print(status_code)
+        else:
+            print("<empty response>")
+    else:
+        print(data)
+
+
 DEFAULT_TIMEOUT = float(os.getenv("PG_SHELL_TIMEOUT", "30"))
 
 
@@ -44,14 +74,14 @@ def exec_command(
             f"{base_url}/rpc/submit_command",
             json={"user_id": user_id, "command": cmd},
             timeout=timeout,
+            headers=_POST_HEADERS,
         )
         resp.raise_for_status()
     except requests.RequestException as exc:  # pragma: no cover - network failure
         print(f"submit failed: {exc}", file=sys.stderr)
         return 1
 
-    data = resp.json()
-    print(data)
+    _print_response(resp)
     return 0
 
 
@@ -82,14 +112,14 @@ def fork_session(
             f"{base_url}/rpc/fork_session",
             json={"user_id": user_id, "source_command_id": command_id},
             timeout=timeout,
+            headers=_POST_HEADERS,
         )
         resp.raise_for_status()
     except requests.RequestException as exc:  # pragma: no cover - network failure
         print(f"fork failed: {exc}", file=sys.stderr)
         return 1
 
-    data = resp.json()
-    print(data)
+    _print_response(resp)
     return 0
 
 
@@ -116,14 +146,14 @@ def replay_session(base_url: str, session: str, timeout: float = DEFAULT_TIMEOUT
             f"{base_url}/rpc/replay_session",
             json={"session": session},
             timeout=timeout,
+            headers=_POST_HEADERS,
         )
         resp.raise_for_status()
     except requests.RequestException as exc:  # pragma: no cover - network failure
         print(f"replay failed: {exc}", file=sys.stderr)
         return 1
 
-    data = resp.json()
-    print(data)
+    _print_response(resp)
     return 0
 
 
@@ -163,7 +193,11 @@ def tail_output(
                 print(f"tail failed: {exc}", file=sys.stderr)
                 return 1
 
-            rows = resp.json()
+            try:
+                rows = resp.json()
+            except ValueError:
+                _print_response(resp)
+                return 0
             for row in rows:
                 print(f"$ {row['command']}")
                 if row.get('output'):
