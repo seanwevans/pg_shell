@@ -8,35 +8,43 @@ from workers.db import get_conn
 
 
 def replay_commands(user_id: str, start_id: int) -> None:
-    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(
-            """
-            SELECT id, command
-              FROM commands
-             WHERE user_id = %s AND id >= %s
-          ORDER BY id ASC
-            """,
-            (user_id, start_id),
-        )
-        batch_size = 100
-        total = 0
-        while True:
-            rows = cur.fetchmany(batch_size)
-            if not rows:
-                break
-            for row in rows:
-                cmd_id = row["id"]
-                command = row["command"]
-                logging.info("Replaying command %s: %s", cmd_id, command)
-                cur.execute("SELECT submit_command(%s, %s)", (user_id, command))
-                new_id = cur.fetchone()[0]
-                conn.commit()
-                logging.info("Queued as command %s", new_id)
-                total += 1
-        if total == 0:
-            logging.info("no commands to replay")
-        else:
-            logging.info("Replayed %d commands", total)
+    with get_conn() as history_conn:
+        with history_conn.cursor(cursor_factory=RealDictCursor) as history_cur:
+            history_cur.execute(
+                """
+                SELECT id, command
+                  FROM commands
+                 WHERE user_id = %s AND id >= %s
+              ORDER BY id ASC
+                """,
+                (user_id, start_id),
+            )
+            batch_size = 100
+            total = 0
+            with get_conn() as submit_conn:
+                with submit_conn.cursor() as submit_cur:
+                    while True:
+                        rows = history_cur.fetchmany(batch_size)
+                        if not rows:
+                            break
+                        for row in rows:
+                            cmd_id = row["id"]
+                            command = row["command"]
+                            logging.info(
+                                "Replaying command %s: %s", cmd_id, command
+                            )
+                            submit_cur.execute(
+                                "SELECT submit_command(%s, %s)",
+                                (user_id, command),
+                            )
+                            new_id = submit_cur.fetchone()[0]
+                            submit_conn.commit()
+                            logging.info("Queued as command %s", new_id)
+                            total += 1
+            if total == 0:
+                logging.info("no commands to replay")
+            else:
+                logging.info("Replayed %d commands", total)
 
 
 def main() -> None:
