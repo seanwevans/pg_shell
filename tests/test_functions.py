@@ -1,3 +1,4 @@
+import json
 import os
 import select
 import time
@@ -33,6 +34,29 @@ def wait_for_notification(conn, timeout: float = 2.0):
             break
         select.select([conn], [], [], min(0.1, remaining))
     return None
+
+
+def _collect_index_names(plan_node):
+    indexes = []
+
+    def _traverse(node):
+        index_name = node.get("Index Name")
+        if index_name:
+            indexes.append(index_name)
+        for child in node.get("Plans", []):
+            _traverse(child)
+
+    _traverse(plan_node)
+    return indexes
+
+
+def _fetch_plan_root(cur):
+    raw = cur.fetchone()[0]
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    if isinstance(raw, list):
+        raw = raw[0]
+    return raw["Plan"]
 
 
 @pytest.fixture(scope="module")
@@ -156,3 +180,42 @@ def test_latest_output_since_id(conn):
         rows = cur.fetchall()
         assert len(rows) == 1
         assert rows[0][0] == ids[2]
+
+
+def test_command_indexes_query_plans(conn):
+    primary_user = str(uuid.uuid4())
+    secondary_user = str(uuid.uuid4())
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (primary_user, "planner"))
+        cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (secondary_user, "other"))
+
+        # Populate enough data to give the planner a strong preference for the new indexes
+        for i in range(50):
+            cur.execute(
+                "INSERT INTO commands(user_id, command, status, submitted_at)"
+                " VALUES (%s, %s, %s, now() - (%s * INTERVAL '1 minute'))",
+                (primary_user, f'cmd {i}', 'pending' if i % 3 else 'done', i),
+            )
+        for i in range(10):
+            cur.execute(
+                "INSERT INTO commands(user_id, command, status, submitted_at)"
+                " VALUES (%s, %s, %s, now() - (%s * INTERVAL '1 minute'))",
+                (secondary_user, f'spare {i}', 'pending', i),
+            )
+
+        cur.execute(
+            "EXPLAIN (FORMAT JSON) "
+            "SELECT id FROM commands WHERE status = 'pending' ORDER BY submitted_at LIMIT 5"
+        )
+        pending_plan = _fetch_plan_root(cur)
+        pending_indexes = _collect_index_names(pending_plan)
+        assert "commands_status_submitted_at_idx" in pending_indexes
+
+        cur.execute(
+            "EXPLAIN (FORMAT JSON) "
+            "SELECT id FROM commands WHERE user_id = %s ORDER BY id DESC LIMIT 1",
+            (primary_user,),
+        )
+        latest_plan = _fetch_plan_root(cur)
+        latest_indexes = _collect_index_names(latest_plan)
+        assert "commands_user_id_id_idx" in latest_indexes

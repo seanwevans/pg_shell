@@ -35,3 +35,10 @@ CREATE TABLE IF NOT EXISTS pg_shell_config (
 INSERT INTO pg_shell_config(key, value)
 VALUES ('listen_channel', 'new_command')
 ON CONFLICT (key) DO NOTHING;
+
+CREATE INDEX IF NOT EXISTS commands_status_submitted_at_idx
+  ON commands (status, submitted_at);
+
+CREATE INDEX IF NOT EXISTS commands_user_id_id_idx
+  ON commands (user_id, id);
+
