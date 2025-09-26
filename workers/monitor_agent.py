@@ -66,6 +66,15 @@ def main() -> None:
     def run_loop(csv_writer: csv.writer | None) -> int:
         while True:
             try:
+                conn = get_conn()
+            except RuntimeError as exc:
+                logging.error("Failed to connect to database: %s", exc)
+                if args.once:
+                    return 1
+                time.sleep(min(args.interval, 5))
+                continue
+
+            try:
                 output_metrics(collect_metrics(conn), csv_writer)
             finally:
                 conn.close()
