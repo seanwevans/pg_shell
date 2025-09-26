@@ -21,12 +21,16 @@ def conn():
     conn = psycopg2.connect(dsn)
     conn.autocommit = True
     cur = conn.cursor()
-    cur.execute("DROP TABLE IF EXISTS commands, environments, users CASCADE;")
+    cur.execute(
+        "DROP TABLE IF EXISTS commands, environments, users, pg_shell_config CASCADE;"
+    )
     cur.execute(INIT_SQL)
     cur.close()
     yield conn
     cur = conn.cursor()
-    cur.execute("DROP TABLE commands, environments, users CASCADE;")
+    cur.execute(
+        "DROP TABLE commands, environments, users, pg_shell_config CASCADE;"
+    )
     cur.close()
     conn.close()
 

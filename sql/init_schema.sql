@@ -26,3 +26,12 @@ CREATE TABLE IF NOT EXISTS commands (
   completed_at TIMESTAMP,
   CONSTRAINT status_enum CHECK (status IN ('pending','running','done','failed'))
 );
+
+CREATE TABLE IF NOT EXISTS pg_shell_config (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+INSERT INTO pg_shell_config(key, value)
+VALUES ('listen_channel', 'new_command')
+ON CONFLICT (key) DO NOTHING;
