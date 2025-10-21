@@ -1,4 +1,5 @@
 # pg_shell
+<img width="256" alt="ChatGPT Image Oct 21, 2025, 01_42_58 PM" src="https://github.com/user-attachments/assets/59f007f2-571d-42ed-889b-4369d936bfba" />
 
 A stateless, auditable, replayable command shell powered entirely by PostgreSQL and htmx.
 
