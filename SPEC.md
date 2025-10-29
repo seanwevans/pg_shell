@@ -78,7 +78,7 @@ Execution must:
 ## 4. REST Interface (via PostgREST)
 
 - `POST /rpc/submit_command`
-- `GET /rpc/latest_output?user_id=eq.{uuid}`
+- `GET /rpc/latest_output?p_user_id=eq.{uuid}`
 - `POST /rpc/fork_session`
 
 Requests/responses in JSON.
@@ -91,7 +91,7 @@ Requests/responses in JSON.
 
 ```html
 <div id="output"
-  hx-get="/rpc/latest_output?user_id=eq.USER_ID"
+  hx-get="/rpc/latest_output?p_user_id=eq.USER_ID"
   hx-trigger="load, every 1s"
   hx-swap="innerHTML">
 </div>
