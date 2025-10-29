@@ -1,3 +1,5 @@
+import csv
+
 import workers.monitor_agent as monitor_agent
 
 
@@ -65,3 +67,17 @@ def test_collect_metrics_streams(monkeypatch):
     assert len(captured) == 2
     assert "u2" in captured[0]
     assert "u1" in captured[1]
+
+
+def test_output_metrics_flushes_immediately(tmp_path):
+    rows = iter([("u1", "2024-01-01", 1, 0.5)])
+    csv_path = tmp_path / "metrics.csv"
+
+    with open(csv_path, "a", newline="") as csv_file:
+        writer = csv.writer(csv_file)
+        monitor_agent.output_metrics(rows, writer, csv_file.flush)
+
+        with open(csv_path, "r", newline="") as reader:
+            contents = reader.read()
+
+    assert "u1" in contents

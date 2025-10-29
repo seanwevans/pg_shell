@@ -13,7 +13,7 @@ import argparse
 import csv
 import logging
 import time
-from typing import Iterator, Tuple
+from typing import Callable, Iterator, Tuple
 
 from workers.db import get_conn
 
@@ -40,12 +40,18 @@ def collect_metrics(conn) -> Iterator[Row]:
             yield row
 
 
-def output_metrics(rows: Iterator[Row], csv_writer: csv.writer | None) -> None:
+def output_metrics(
+    rows: Iterator[Row],
+    csv_writer: csv.writer | None,
+    flush: Callable[[], None] | None = None,
+) -> None:
     for row in rows:
         user_id, day, count, avg_seconds = row
         avg_seconds = round(avg_seconds or 0.0, 3)
         if csv_writer:
             csv_writer.writerow([user_id, day, count, avg_seconds])
+            if flush is not None:
+                flush()
         else:
             print(f"{day} user={user_id} commands={count} avg_s={avg_seconds}")
 
@@ -63,7 +69,10 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
-    def run_loop(csv_writer: csv.writer | None) -> int:
+    def run_loop(
+        csv_writer: csv.writer | None,
+        flush: Callable[[], None] | None,
+    ) -> int:
         while True:
             try:
                 conn = get_conn()
@@ -75,9 +84,12 @@ def main() -> None:
                 continue
 
             try:
-                output_metrics(collect_metrics(conn), csv_writer)
+                output_metrics(collect_metrics(conn), csv_writer, flush)
             finally:
                 conn.close()
+
+            if csv_writer and flush is not None:
+                flush()
 
             if args.once:
                 return 0
@@ -87,11 +99,13 @@ def main() -> None:
 
         with open(args.csv, "a", newline="") as csv_file:
             csv_writer = csv.writer(csv_file)
+            flush = csv_file.flush
             if csv_file.tell() == 0:
                 csv_writer.writerow(["user_id", "day", "command_count", "avg_seconds"])
-            return run_loop(csv_writer)
+                flush()
+            return run_loop(csv_writer, flush)
     else:
-        return run_loop(None)
+        return run_loop(None, None)
 
 if __name__ == "__main__":
     raise SystemExit(main())
