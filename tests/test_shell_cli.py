@@ -92,3 +92,61 @@ def test_tail_output_prints_text_when_json_missing(monkeypatch, capsys):
     assert rc == 0
     captured = capsys.readouterr()
     assert captured.out.strip() == 'plain text'
+
+
+def test_tail_output_waits_for_terminal_status(monkeypatch, capsys):
+    responses = [
+        [
+            {
+                "id": 1,
+                "command": "echo hi",
+                "status": "pending",
+            }
+        ],
+        [
+            {
+                "id": 1,
+                "command": "echo hi",
+                "status": "done",
+                "output": "hi",
+                "exit_code": 0,
+            }
+        ],
+        [],
+    ]
+
+    call_params: list[dict[str, object]] = []
+
+    class Resp:
+        def __init__(self, idx: int) -> None:
+            self._idx = idx
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return responses[self._idx]
+
+    def fake_get(url, params, timeout):
+        idx = len(call_params)
+        call_params.append(dict(params))
+        return Resp(idx if idx < len(responses) else len(responses) - 1)
+
+    monkeypatch.setattr(sc.requests, 'get', fake_get)
+    monkeypatch.setattr(sc.time, 'sleep', lambda _: None)
+
+    rc = sc.tail_output('http://example', 'u1', interval=0, max_polls=3)
+    assert rc == 0
+
+    captured = capsys.readouterr()
+    assert captured.out.splitlines() == [
+        '$ echo hi',
+        'hi',
+        '(exit 0)',
+    ]
+
+    assert call_params == [
+        {'p_user_id': 'eq.u1'},
+        {'p_user_id': 'eq.u1'},
+        {'p_user_id': 'eq.u1', 'p_since_id': 1},
+    ]
