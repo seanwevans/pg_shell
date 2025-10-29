@@ -13,10 +13,21 @@ RETURNS TABLE(
     status TEXT,
     submitted_at TIMESTAMP,
     completed_at TIMESTAMP
-) LANGUAGE sql AS $$
-    SELECT id, command, output, exit_code, status, submitted_at, completed_at
-    FROM commands
-    WHERE user_id = $1 AND id > p_since_id
-    ORDER BY id DESC
-    LIMIT 20;
+) LANGUAGE plpgsql AS $$
+BEGIN
+    IF p_since_id = 0 THEN
+        RETURN QUERY
+        SELECT id, command, output, exit_code, status, submitted_at, completed_at
+        FROM commands
+        WHERE user_id = p_user_id AND id > p_since_id
+        ORDER BY id DESC
+        LIMIT 20;
+    ELSE
+        RETURN QUERY
+        SELECT id, command, output, exit_code, status, submitted_at, completed_at
+        FROM commands
+        WHERE user_id = p_user_id AND id > p_since_id
+        ORDER BY id ASC;
+    END IF;
+END;
 $$;

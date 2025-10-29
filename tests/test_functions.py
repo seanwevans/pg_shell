@@ -85,14 +85,24 @@ def test_submit_and_latest_output(conn):
     user_id = str(uuid.uuid4())
     with conn.cursor() as cur:
         cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (user_id, "testuser"))
-        cur.execute("SELECT submit_command(%s, %s)", (user_id, "echo hello"))
-        cmd_id = cur.fetchone()[0]
-        cur.execute("UPDATE commands SET output='hello', exit_code=0, status='done', completed_at=now() WHERE id=%s", (cmd_id,))
+        cmd_ids = []
+        for idx in range(25):
+            cur.execute("SELECT submit_command(%s, %s)", (user_id, f"echo msg{idx}"))
+            cmd_id = cur.fetchone()[0]
+            cur.execute(
+                "UPDATE commands SET output=%s, exit_code=0, status='done', completed_at=now() WHERE id=%s",
+                (f"msg{idx}", cmd_id),
+            )
+            cmd_ids.append(cmd_id)
+
         cur.execute("SELECT * FROM latest_output(%s)", (user_id,))
-        row = cur.fetchone()
-        assert row[0] == cmd_id
-        assert row[2] == 'hello'
-        assert row[6] is not None
+        rows = cur.fetchall()
+
+        assert len(rows) == 20
+        expected_ids = list(reversed(cmd_ids))[:20]
+        assert [row[0] for row in rows] == expected_ids
+        assert rows[0][2] == "msg24"
+        assert rows[0][6] is not None
 
 
 def test_submit_command_notifies(conn):
@@ -168,18 +178,22 @@ def test_latest_output_since_id(conn):
     with conn.cursor() as cur:
         cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (user_id, "u3"))
         ids = []
-        for cmd in ("echo one", "echo two", "echo three"):
-            cur.execute("SELECT submit_command(%s, %s)", (user_id, cmd))
+        for idx in range(25):
+            cur.execute("SELECT submit_command(%s, %s)", (user_id, f"echo seq{idx}"))
             cmd_id = cur.fetchone()[0]
             cur.execute(
                 "UPDATE commands SET output=%s, exit_code=0, status='done', completed_at=now() WHERE id=%s",
-                (cmd.split()[1], cmd_id),
+                (f"seq{idx}", cmd_id),
             )
             ids.append(cmd_id)
-        cur.execute("SELECT * FROM latest_output(%s, %s)", (user_id, ids[1]))
+
+        since_id = ids[4]
+        cur.execute("SELECT * FROM latest_output(%s, %s)", (user_id, since_id))
         rows = cur.fetchall()
-        assert len(rows) == 1
-        assert rows[0][0] == ids[2]
+
+        expected_ids = ids[5:]
+        assert len(rows) == len(expected_ids)
+        assert [row[0] for row in rows] == expected_ids
 
 
 def test_command_indexes_query_plans(conn):
