@@ -199,6 +199,10 @@ def tail_output(
                 _print_response(resp)
                 return 0
             for row in rows:
+                status = row.get("status")
+                if status not in {"done", "failed"}:
+                    continue
+
                 print(f"$ {row['command']}")
                 if row.get('output'):
                     print(row['output'])
