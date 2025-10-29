@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <title>pg_shell</title>
   <script src="https://unpkg.com/htmx.org@1.9.6"></script>
+  <script src="https://unpkg.com/htmx.org/dist/ext/json-enc.js"></script>
 </head>
 <body>
 <div id="output"
@@ -17,6 +18,8 @@
   hx-trigger="submit from:form"
   hx-target="#output"
   hx-swap="beforeend"
+  hx-ext="json-enc"
+  hx-encoding="json"
 >
   <input type="hidden" name="user_id" value="USER_ID" />
   <input name="command" autocomplete="off" autofocus placeholder="Enter command…" />
