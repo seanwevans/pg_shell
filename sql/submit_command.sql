@@ -1,7 +1,12 @@
 -- submit_command: queues a command for execution
 -- References SPEC.md (RPC function) and executor_agent in AGENTS.md
 
-CREATE OR REPLACE FUNCTION submit_command(p_user_id UUID, p_command TEXT)
+CREATE OR REPLACE FUNCTION submit_command(
+  p_user_id UUID,
+  p_command TEXT,
+  p_replay_of_command_id INT DEFAULT NULL,
+  p_replay_run_id UUID DEFAULT NULL
+)
 RETURNS INTEGER LANGUAGE plpgsql AS $$
 DECLARE
   user_exists INTEGER;
@@ -23,8 +28,22 @@ BEGIN
       RETURNING * INTO env_row;
   END IF;
 
-  INSERT INTO commands(user_id, command, cwd_snapshot, env_snapshot)
-    VALUES (p_user_id, p_command, env_row.cwd, env_row.env)
+  INSERT INTO commands(
+    user_id,
+    command,
+    cwd_snapshot,
+    env_snapshot,
+    replay_of_command_id,
+    replay_run_id
+  )
+    VALUES (
+      p_user_id,
+      p_command,
+      env_row.cwd,
+      env_row.env,
+      p_replay_of_command_id,
+      p_replay_run_id
+    )
     RETURNING id INTO new_id;
 
   SELECT value INTO channel FROM pg_shell_config WHERE key = 'listen_channel';
