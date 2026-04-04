@@ -9,9 +9,10 @@ BEGIN
   SELECT cwd_snapshot, env_snapshot
     INTO src
     FROM commands
-    WHERE id = p_source_command_id;
+    WHERE id = p_source_command_id
+      AND user_id = p_user_id;
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'source command % not found', p_source_command_id;
+    RAISE EXCEPTION 'source command not found or forbidden';
   END IF;
 
   INSERT INTO environments(user_id, cwd, env)

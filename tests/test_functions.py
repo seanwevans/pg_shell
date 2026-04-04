@@ -152,7 +152,7 @@ def test_submit_command_respects_configured_channel(conn):
     assert notification.payload == str(cmd_id)
 
 
-def test_fork_session(conn):
+def test_fork_session_same_user_source_command_succeeds(conn):
     user_id = str(uuid.uuid4())
     with conn.cursor() as cur:
         cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (user_id, "u2"))
@@ -171,6 +171,29 @@ def test_fork_session(conn):
         cur.execute("SELECT cwd FROM environments WHERE user_id=%s", (user_id,))
         cwd = cur.fetchone()[0]
         assert cwd == '/home/start'
+
+
+def test_fork_session_different_user_source_command_fails(conn):
+    source_user_id = str(uuid.uuid4())
+    target_user_id = str(uuid.uuid4())
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO users(id, username) VALUES (%s, %s)",
+            (source_user_id, "fork-src"),
+        )
+        cur.execute(
+            "INSERT INTO users(id, username) VALUES (%s, %s)",
+            (target_user_id, "fork-dst"),
+        )
+        cur.execute("SELECT submit_command(%s, %s)", (source_user_id, "pwd"))
+        source_cmd_id = cur.fetchone()[0]
+        cur.execute(
+            "UPDATE commands SET cwd_snapshot=%s, env_snapshot=%s::jsonb WHERE id=%s",
+            ('/home/source', '{"SRC":"1"}', source_cmd_id),
+        )
+
+        with pytest.raises(psycopg2.errors.RaiseException, match="not found or forbidden"):
+            cur.execute("SELECT fork_session(%s, %s)", (target_user_id, source_cmd_id))
 
 
 def test_latest_output_since_id(conn):
