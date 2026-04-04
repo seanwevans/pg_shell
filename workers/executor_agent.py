@@ -211,10 +211,26 @@ def handle_command(conn, row: Dict[str, Any]) -> None:
 
     if len(tokens) == 2 and tokens[0] == "cd":
         path = tokens[1]
+        shell_root = os.path.realpath(os.getenv("SHELL_ROOT", "/home/sandbox"))
         if os.path.isabs(path):
-            new_cwd = os.path.normpath(path)
+            new_cwd = os.path.realpath(path)
         else:
-            new_cwd = os.path.normpath(os.path.join(row["cwd_snapshot"], path))
+            new_cwd = os.path.realpath(os.path.join(row["cwd_snapshot"], path))
+        try:
+            in_root = os.path.commonpath([shell_root, new_cwd]) == shell_root
+        except ValueError:
+            in_root = False
+        if not in_root:
+            error = f"cd: {path}: Permission denied"
+            update_command(conn, row["id"], "failed", error, 1)
+            logging.error(
+                "Command %s for user %s failed: path %s escapes shell root %s",
+                row["id"],
+                row["user_id"],
+                new_cwd,
+                shell_root,
+            )
+            return
         if not os.path.isdir(new_cwd):
             error = f"cd: {path}: No such file or directory"
             update_command(conn, row["id"], "failed", error, 1)
