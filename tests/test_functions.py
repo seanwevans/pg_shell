@@ -151,6 +151,15 @@ def test_submit_command_respects_configured_channel(conn):
     assert notification.channel == alt_channel
     assert notification.payload == str(cmd_id)
 
+def test_submit_command_requires_existing_user(conn):
+    missing_user_id = str(uuid.uuid4())
+    with conn.cursor() as cur:
+        with pytest.raises(psycopg2.Error) as exc_info:
+            cur.execute("SELECT submit_command(%s, %s)", (missing_user_id, "echo nope"))
+    err = exc_info.value
+    assert "Unknown user_id" in str(err)
+    assert err.pgcode == '22023'
+
 
 def test_fork_session_same_user_source_command_succeeds(conn):
     user_id = str(uuid.uuid4())

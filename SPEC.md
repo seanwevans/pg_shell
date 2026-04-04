@@ -48,6 +48,7 @@ CREATE INDEX commands_user_id_id_idx ON commands (user_id, id);
 ### `submit_command(user_id UUID, command TEXT) RETURNS INTEGER`
 
 - Inserts a new `commands` row with snapshots from `environments`
+- Requires `user_id` to already exist in `users`; raises SQLSTATE `22023` with a user-friendly error for unknown users
 - Returns `commands.id`
 
 ### `latest_output(user_id UUID) RETURNS TABLE(id, command, output, exit_code, status, submitted_at)`
