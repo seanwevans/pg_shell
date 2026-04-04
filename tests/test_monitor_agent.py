@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import csv
 
 import workers.monitor_agent as monitor_agent
@@ -14,9 +16,12 @@ def test_collect_metrics_streams(monkeypatch):
     class FakeCursor:
         def __init__(self):
             self.idx = 0
+            self.sql = None
+            self.params = None
 
-        def execute(self, sql):
-            pass
+        def execute(self, sql, params=None):
+            self.sql = sql
+            self.params = params
 
         def fetchone(self):
             fetch_calls.append(self.idx)
@@ -67,6 +72,47 @@ def test_collect_metrics_streams(monkeypatch):
     assert len(captured) == 2
     assert "u2" in captured[0]
     assert "u1" in captured[1]
+    assert "ORDER BY day, user_id" in cursor.sql
+
+
+def test_collect_metrics_uses_incremental_filter_when_state_present():
+    class FakeCursor:
+        def __init__(self):
+            self.sql = None
+            self.params = None
+            self.calls = 0
+
+        def execute(self, sql, params=None):
+            self.sql = sql
+            self.params = params
+
+        def fetchone(self):
+            self.calls += 1
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            pass
+
+    cursor = FakeCursor()
+
+    class FakeConn:
+        def cursor(self, name=None):
+            return cursor
+
+    last_completed = datetime(2024, 1, 1, 10, 0, 0)
+    list(
+        monitor_agent.collect_metrics(
+            FakeConn(),
+            last_completed_at=last_completed,
+            last_command_id=42,
+        )
+    )
+
+    assert "completed_at > %s OR (completed_at = %s AND id > %s)" in cursor.sql
+    assert cursor.params == [last_completed, last_completed, 42]
 
 
 def test_output_metrics_flushes_immediately(tmp_path):
@@ -81,3 +127,16 @@ def test_output_metrics_flushes_immediately(tmp_path):
             contents = reader.read()
 
     assert "u1" in contents
+
+
+def test_compute_since_timestamp_rejects_dual_window_args():
+    class Args:
+        since_hours = 1
+        since_days = 1
+
+    try:
+        monitor_agent.compute_since_timestamp(Args())
+    except ValueError:
+        pass
+    else:  # pragma: no cover - defensive
+        raise AssertionError("Expected ValueError when both windows are set")
