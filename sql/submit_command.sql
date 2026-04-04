@@ -4,10 +4,18 @@
 CREATE OR REPLACE FUNCTION submit_command(p_user_id UUID, p_command TEXT)
 RETURNS INTEGER LANGUAGE plpgsql AS $$
 DECLARE
+  user_exists INTEGER;
   env_row environments%ROWTYPE;
   new_id INTEGER;
   channel TEXT;
 BEGIN
+  -- validate user exists before creating dependent records
+  SELECT 1 INTO user_exists FROM users WHERE id = p_user_id;
+  IF user_exists IS NULL THEN
+    RAISE EXCEPTION 'Unknown user_id: %. Create the user before submitting commands.', p_user_id
+      USING ERRCODE = '22023';
+  END IF;
+
   -- ensure environment row exists
   SELECT * INTO env_row FROM environments WHERE user_id = p_user_id;
   IF NOT FOUND THEN
