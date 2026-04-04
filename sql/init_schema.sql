@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS commands (
   id SERIAL PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES users(id),
   command TEXT NOT NULL,
+  replay_of_command_id INT REFERENCES commands(id),
+  replay_run_id UUID,
   submitted_at TIMESTAMP NOT NULL DEFAULT now(),
   status TEXT NOT NULL DEFAULT 'pending',
   output TEXT,
@@ -50,6 +52,9 @@ CREATE INDEX IF NOT EXISTS commands_status_submitted_at_idx
 CREATE INDEX IF NOT EXISTS commands_user_id_id_idx
   ON commands (user_id, id);
 
-
 CREATE INDEX IF NOT EXISTS commands_status_completed_at_idx
   ON commands (status, completed_at, id);
+  
+CREATE INDEX IF NOT EXISTS commands_user_replay_source_idx
+  ON commands (user_id, replay_of_command_id)
+  WHERE replay_of_command_id IS NOT NULL;
