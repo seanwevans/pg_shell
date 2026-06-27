@@ -59,6 +59,12 @@ CREATE INDEX commands_user_id_id_idx ON commands (user_id, id);
 
 - Creates a new `environments` entry based on historical snapshot
 
+### `replay_session(user_id UUID, start_id INTEGER) RETURNS UUID`
+
+- Re-queues the user's original commands with `id >= start_id`, in order
+- Each replayed command is tagged with `replay_of_command_id` and a shared `replay_run_id`
+- Returns the `replay_run_id` grouping the queued commands
+
 ---
 
 ## 3. Execution Backend

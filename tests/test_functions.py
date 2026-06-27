@@ -229,6 +229,73 @@ def test_latest_output_since_id(conn):
         assert [row[0] for row in rows] == expected_ids
 
 
+def test_replay_session_requeues_from_start(conn):
+    user_id = str(uuid.uuid4())
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (user_id, "replayer"))
+        original_ids = []
+        for idx in range(3):
+            cur.execute("SELECT submit_command(%s, %s)", (user_id, f"echo r{idx}"))
+            original_ids.append(cur.fetchone()[0])
+
+        start_id = original_ids[1]
+        cur.execute("SELECT replay_session(%s, %s)", (user_id, start_id))
+        run_id = cur.fetchone()[0]
+        assert run_id is not None
+
+        # Replayed rows reference the originals at/after start_id, share the
+        # returned run id, and are queued as fresh pending work.
+        cur.execute(
+            """
+            SELECT command, replay_of_command_id, replay_run_id, status
+              FROM commands
+             WHERE replay_run_id = %s
+             ORDER BY id
+            """,
+            (run_id,),
+        )
+        replayed = cur.fetchall()
+
+    assert [r[0] for r in replayed] == ["echo r1", "echo r2"]
+    assert [r[1] for r in replayed] == original_ids[1:]
+    assert all(str(r[2]) == str(run_id) for r in replayed)
+    assert all(r[3] == "pending" for r in replayed)
+
+
+def test_replay_session_only_replays_originals(conn):
+    user_id = str(uuid.uuid4())
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (user_id, "replayer2"))
+        cur.execute("SELECT submit_command(%s, %s)", (user_id, "echo once"))
+        original_id = cur.fetchone()[0]
+
+        # First replay creates one replayed row.
+        cur.execute("SELECT replay_session(%s, %s)", (user_id, original_id))
+        cur.fetchone()
+
+        # Second replay from the same start must re-queue only the original,
+        # not the row produced by the first replay.
+        cur.execute("SELECT replay_session(%s, %s)", (user_id, original_id))
+        second_run = cur.fetchone()[0]
+
+        cur.execute(
+            "SELECT replay_of_command_id FROM commands WHERE replay_run_id = %s",
+            (second_run,),
+        )
+        rows = cur.fetchall()
+
+    assert len(rows) == 1
+    assert rows[0][0] == original_id
+
+
+def test_replay_session_unknown_user_raises(conn):
+    missing_user = str(uuid.uuid4())
+    with conn.cursor() as cur:
+        with pytest.raises(psycopg2.Error) as exc_info:
+            cur.execute("SELECT replay_session(%s, %s)", (missing_user, 1))
+    assert exc_info.value.pgcode == "22023"
+
+
 def test_command_indexes_query_plans(conn):
     primary_user = str(uuid.uuid4())
     secondary_user = str(uuid.uuid4())

@@ -54,6 +54,44 @@ def test_fork_session_posts_prefixed_arguments(monkeypatch, capsys):
     assert rc == 0
 
 
+def test_replay_session_posts_prefixed_arguments(monkeypatch, capsys):
+    class Resp:
+        text = ""
+        status_code = 200
+        reason = "OK"
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"replay_session": "00000000-0000-0000-0000-000000000000"}
+
+    def fake_post(url, json, timeout, headers):
+        assert url == "http://example/rpc/replay_session"
+        assert json == {"p_user_id": "u1", "p_start_id": 5}
+        return Resp()
+
+    monkeypatch.setattr(sc.requests, "post", fake_post)
+
+    rc = sc.replay_session("http://example", "u1", 5)
+    assert rc == 0
+
+
+def test_main_replay_dispatches_user_and_start(monkeypatch):
+    captured = {}
+
+    def fake_replay(base_url, user_id, start_id, timeout):
+        captured["args"] = (base_url, user_id, start_id)
+        return 0
+
+    monkeypatch.setattr(sc, "replay_session", fake_replay)
+    rc = sc.main(
+        ["--base-url", "http://example", "replay", "--user", "u1", "--start", "5"]
+    )
+    assert rc == 0
+    assert captured["args"] == ("http://example", "u1", 5)
+
+
 def test_exec_command_handles_empty_response(monkeypatch, capsys):
     class Resp:
         text = ""
