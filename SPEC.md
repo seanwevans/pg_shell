@@ -103,8 +103,8 @@ Requests/responses in JSON.
   hx-target="#output"
   hx-swap="beforeend"
 >
-  <input type="hidden" name="user_id" value="USER_ID" />
-  <input name="command" autocomplete="off" autofocus placeholder="Enter command…" />
+  <input type="hidden" name="p_user_id" value="USER_ID" />
+  <input name="p_command" autocomplete="off" autofocus placeholder="Enter command…" />
 </form>
 ```
 
