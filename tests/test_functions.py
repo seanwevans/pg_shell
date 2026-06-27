@@ -177,9 +177,10 @@ def test_fork_session_same_user_source_command_succeeds(conn):
         )
         cur.execute("SELECT fork_session(%s, %s)", (user_id, cmd_id))
         cur.fetchone()
-        cur.execute("SELECT cwd FROM environments WHERE user_id=%s", (user_id,))
-        cwd = cur.fetchone()[0]
+        cur.execute("SELECT cwd, env FROM environments WHERE user_id=%s", (user_id,))
+        cwd, env = cur.fetchone()
         assert cwd == '/home/start'
+        assert env == {"FOO": "BAR"}
 
 
 def test_fork_session_different_user_source_command_fails(conn):
