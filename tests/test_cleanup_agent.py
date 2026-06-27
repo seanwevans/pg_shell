@@ -61,8 +61,11 @@ def test_cleanup_once_resets_env(conn):
 def test_cleanup_once_resets_multiple_envs(conn, caplog):
     ids = [str(uuid.uuid4()) for _ in range(2)]
     with conn.cursor() as cur:
-        for uid in ids:
-            cur.execute("INSERT INTO users (id, username) VALUES (%s, %s)", (uid, "user"))
+        for i, uid in enumerate(ids):
+            cur.execute(
+                "INSERT INTO users (id, username) VALUES (%s, %s)",
+                (uid, f"multiuser{i}"),
+            )
             cur.execute(
                 "INSERT INTO environments (user_id, cwd, env, updated_at) VALUES (%s, %s, %s::jsonb, now() - interval '100 days')",
                 (uid, '/tmp', '{"k":1}')
@@ -76,7 +79,7 @@ def test_cleanup_once_resets_multiple_envs(conn, caplog):
     assert "Reset 2 stale environments" in caplog.text
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT cwd, env FROM environments WHERE user_id = ANY(%s) ORDER BY user_id",
+            "SELECT cwd, env FROM environments WHERE user_id = ANY(%s::uuid[]) ORDER BY user_id",
             (ids,)
         )
         rows = cur.fetchall()

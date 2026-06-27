@@ -249,6 +249,11 @@ def test_command_indexes_query_plans(conn):
                 (secondary_user, f'spare {i}', 'pending', i),
             )
 
+        # Refresh planner statistics so index selection reflects the data we
+        # just inserted; without this the planner works from empty-table stats
+        # and may pick an unrelated index.
+        cur.execute("ANALYZE commands")
+
         cur.execute(
             "EXPLAIN (FORMAT JSON) "
             "SELECT id FROM commands WHERE status = 'pending' ORDER BY submitted_at LIMIT 5"

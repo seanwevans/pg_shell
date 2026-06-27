@@ -15,19 +15,24 @@ RETURNS TABLE(
     completed_at TIMESTAMP
 ) LANGUAGE plpgsql AS $$
 BEGIN
+    -- Columns are qualified with the table alias so they are not confused
+    -- with the identically named RETURNS TABLE output columns, which would
+    -- otherwise raise "column reference \"id\" is ambiguous".
     IF p_since_id = 0 THEN
         RETURN QUERY
-        SELECT id, command, output, exit_code, status, submitted_at, completed_at
-        FROM commands
-        WHERE user_id = p_user_id AND id > p_since_id
-        ORDER BY id DESC
+        SELECT c.id, c.command, c.output, c.exit_code, c.status,
+               c.submitted_at, c.completed_at
+        FROM commands c
+        WHERE c.user_id = p_user_id AND c.id > p_since_id
+        ORDER BY c.id DESC
         LIMIT 20;
     ELSE
         RETURN QUERY
-        SELECT id, command, output, exit_code, status, submitted_at, completed_at
-        FROM commands
-        WHERE user_id = p_user_id AND id > p_since_id
-        ORDER BY id ASC;
+        SELECT c.id, c.command, c.output, c.exit_code, c.status,
+               c.submitted_at, c.completed_at
+        FROM commands c
+        WHERE c.user_id = p_user_id AND c.id > p_since_id
+        ORDER BY c.id ASC;
     END IF;
 END;
 $$;
