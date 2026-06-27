@@ -72,7 +72,7 @@ def exec_command(
     try:
         resp = requests.post(
             f"{base_url}/rpc/submit_command",
-            json={"user_id": user_id, "command": cmd},
+            json={"p_user_id": user_id, "p_command": cmd},
             timeout=timeout,
             headers=_POST_HEADERS,
         )
@@ -110,7 +110,7 @@ def fork_session(
     try:
         resp = requests.post(
             f"{base_url}/rpc/fork_session",
-            json={"user_id": user_id, "source_command_id": command_id},
+            json={"p_user_id": user_id, "p_source_command_id": command_id},
             timeout=timeout,
             headers=_POST_HEADERS,
         )

@@ -15,7 +15,9 @@ def test_exec_command_posts_with_prefer_headers(monkeypatch, capsys):
 
     def fake_post(url, json, timeout, headers):
         assert url == "http://example/rpc/submit_command"
-        assert json == {"user_id": "u1", "command": "ls"}
+        # PostgREST maps JSON body keys to function argument names, so the
+        # keys must match submit_command(p_user_id, p_command).
+        assert json == {"p_user_id": "u1", "p_command": "ls"}
         assert timeout == 5
         assert headers["Prefer"] == "return=representation"
         assert headers["Accept"] == "application/json"
@@ -27,6 +29,29 @@ def test_exec_command_posts_with_prefer_headers(monkeypatch, capsys):
     assert rc == 0
     captured = capsys.readouterr()
     assert captured.out.strip() == "{'status': 'ok'}"
+
+
+def test_fork_session_posts_prefixed_arguments(monkeypatch, capsys):
+    class Resp:
+        text = ""
+        status_code = 200
+        reason = "OK"
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"fork_session": "u1"}
+
+    def fake_post(url, json, timeout, headers):
+        assert url == "http://example/rpc/fork_session"
+        assert json == {"p_user_id": "u1", "p_source_command_id": 7}
+        return Resp()
+
+    monkeypatch.setattr(sc.requests, "post", fake_post)
+
+    rc = sc.fork_session("http://example", "u1", 7)
+    assert rc == 0
 
 
 def test_exec_command_handles_empty_response(monkeypatch, capsys):
