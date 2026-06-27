@@ -123,15 +123,22 @@ def fork_session(
     return 0
 
 
-def replay_session(base_url: str, session: str, timeout: float = DEFAULT_TIMEOUT) -> int:
-    """Request a replay of a past session.
+def replay_session(
+    base_url: str, user_id: str, start_id: int, timeout: float = DEFAULT_TIMEOUT
+) -> int:
+    """Replay a user's command history from a starting command.
+
+    Re-queues the user's original commands with id ``>= start_id`` via the
+    ``replay_session`` RPC and prints the returned replay run id.
 
     Parameters
     ----------
     base_url : str
         PostgREST base URL.
-    session : str
-        Timestamp or session ID to replay.
+    user_id : str
+        User whose history is replayed.
+    start_id : int
+        Command id marking the start of the session to replay.
     timeout : float, optional
         HTTP request timeout seconds.
 
@@ -144,7 +151,7 @@ def replay_session(base_url: str, session: str, timeout: float = DEFAULT_TIMEOUT
     try:
         resp = requests.post(
             f"{base_url}/rpc/replay_session",
-            json={"session": session},
+            json={"p_user_id": user_id, "p_start_id": start_id},
             timeout=timeout,
             headers=_POST_HEADERS,
         )
@@ -254,8 +261,11 @@ def main(argv: list[str] | None = None) -> int:
     exec_p.add_argument("--user", required=True, help="User ID")
     exec_p.add_argument("--cmd", required=True, help="Command text")
 
-    replay_p = sub.add_parser("replay", help="Replay a session")
-    replay_p.add_argument("--session", required=True, help="Session timestamp or ID")
+    replay_p = sub.add_parser("replay", help="Replay a session from a starting command")
+    replay_p.add_argument("--user", required=True, help="User ID")
+    replay_p.add_argument(
+        "--start", type=int, required=True, help="Command ID to start replaying from"
+    )
 
     fork_p = sub.add_parser("fork", help="Fork session at a command")
     fork_p.add_argument("--user", required=True, help="User ID")
@@ -272,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "exec":
         rc = exec_command(args.base_url, args.user, args.cmd, args.timeout)
     elif args.command == "replay":
-        rc = replay_session(args.base_url, args.session, args.timeout)
+        rc = replay_session(args.base_url, args.user, args.start, args.timeout)
     elif args.command == "fork":
         rc = fork_session(args.base_url, args.user, args.at, args.timeout)
     elif args.command == "tail":

@@ -18,6 +18,7 @@ SQL_FILES = (
     "sql/submit_command.sql",
     "sql/latest_output.sql",
     "sql/fork_session.sql",
+    "sql/replay_session.sql",
 )
 
 # Tables dropped before (re)installing the schema for a clean slate.
