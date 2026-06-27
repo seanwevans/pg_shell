@@ -1,5 +1,5 @@
 -- submit_command: queues a command for execution
--- References SPEC.md (RPC function) and executor_agent in AGENTS.md
+-- References SPEC.md (RPC function); consumed by workers/executor_agent.py
 
 CREATE OR REPLACE FUNCTION submit_command(
   p_user_id UUID,

@@ -1,5 +1,5 @@
 -- fork_session: creates a new environment from a command snapshot
--- Refers to SPEC.md for snapshot fields and AGENTS.md for replay_agent usage
+-- Refers to SPEC.md for snapshot fields; used by workers/replay_agent.py
 
 CREATE OR REPLACE FUNCTION fork_session(p_user_id UUID, p_source_command_id INTEGER)
 RETURNS UUID LANGUAGE plpgsql AS $$
