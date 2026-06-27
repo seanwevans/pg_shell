@@ -29,6 +29,22 @@ def test_run_subprocess_preserves_exit_code(monkeypatch, tmp_path):
     assert output.endswith("...[truncated]")
 
 
+def test_run_subprocess_times_out(monkeypatch, tmp_path):
+    # SPEC section 7 requires command timeouts to be enforced. A command that
+    # outruns COMMAND_TIMEOUT is killed and reported with exit code 124.
+    monkeypatch.setattr(workers.executor_agent, "COMMAND_TIMEOUT", 1)
+    exit_code, output = run_subprocess("sleep 5", str(tmp_path), None)
+    assert exit_code == 124
+    assert "Timed out after 1s" in output
+
+
+def test_run_subprocess_passes_env_snapshot(monkeypatch, tmp_path):
+    cmd = "python3 -c 'import os;print(os.environ[\"PGS_TEST_VAR\"])'"
+    exit_code, output = run_subprocess(cmd, str(tmp_path), {"PGS_TEST_VAR": "hello"})
+    assert exit_code == 0
+    assert "hello" in output
+
+
 def test_handle_command_uses_combined_output(monkeypatch):
     captured = {}
 
@@ -265,6 +281,31 @@ def test_handle_command_malformed_command(monkeypatch):
     assert captured['status'] == 'failed'
     assert captured['exit_code'] == 1
     assert 'No closing quotation' in captured['output']
+
+
+def test_handle_command_missing_binary_marks_failed(monkeypatch, tmp_path):
+    captured: dict = {}
+
+    def fake_update_command(conn, cmd_id, status, output, exit_code):
+        captured['status'] = status
+        captured['output'] = output
+        captured['exit_code'] = exit_code
+
+    monkeypatch.setattr('workers.executor_agent.update_command', fake_update_command)
+
+    row = {
+        'id': 7,
+        'user_id': 'u1',
+        'command': 'definitely_not_a_real_binary_xyz',
+        'cwd_snapshot': str(tmp_path),
+        'env_snapshot': None,
+    }
+
+    handle_command(None, row)
+
+    assert captured['status'] == 'failed'
+    assert captured['exit_code'] == 1
+    assert 'No such file or directory' in captured['output']
 
 
 def test_main_closes_connection_on_keyboard_interrupt(monkeypatch):
