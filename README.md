@@ -94,15 +94,3 @@ Tests require a PostgreSQL database. Set `TEST_DATABASE_URL` to a DSN with privi
 pip install -r requirements.txt
 pytest
 ```
-
-## User Provisioning Contract
-
-`submit_command(p_user_id UUID, p_command TEXT)` requires that `p_user_id` already
-exists in the `users` table. The function validates this up front and raises a
-clear SQL error (`22023`) for unknown users instead of relying on downstream
-foreign-key failures.
-
-
-## License
-
-This project is licensed under the [MIT License](LICENSE).
