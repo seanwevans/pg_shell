@@ -100,21 +100,50 @@ def wait_for_notify(conn, timeout: float) -> None:
 
 
 def fetch_pending(conn) -> Dict[str, Any] | None:
+    """Claim the next command while holding a session-level per-user lock.
+
+    The advisory lock remains held after this function commits and is released
+    by :func:`handle_command`.  Consequently another executor connection cannot
+    run a command for the same user concurrently.  Snapshots are refreshed from
+    the user's effective environment at claim time, after all preceding
+    commands have reached a terminal state.
+    """
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("BEGIN;")
-        cur.execute(
-            """
-            SELECT id, user_id, command, cwd_snapshot, env_snapshot
-            FROM commands
-            WHERE status = 'pending'
-            ORDER BY submitted_at
+        cur.execute("""
+            SELECT c.id, c.user_id, c.command, e.cwd, e.env,
+                   hashtextextended(c.user_id::text, 0) AS claim_lock_key
+            FROM commands AS c
+            JOIN environments AS e ON e.user_id = c.user_id
+            WHERE c.status = 'pending'
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM commands AS earlier
+                    WHERE earlier.user_id = c.user_id
+                      AND earlier.status IN ('pending', 'running')
+                      AND (earlier.submitted_at, earlier.id)
+                          < (c.submitted_at, c.id)
+              )
+            ORDER BY c.submitted_at, c.id
             FOR UPDATE SKIP LOCKED
             LIMIT 1
-            """
-        )
+            """)
         row = cur.fetchone()
         if row:
-            cur.execute("UPDATE commands SET status='running' WHERE id=%s", (row["id"],))
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (row["claim_lock_key"],))
+            if not cur.fetchone()[0]:
+                conn.commit()
+                return None
+            cur.execute(
+                """
+                UPDATE commands
+                   SET status = 'running', cwd_snapshot = %s, env_snapshot = %s
+                 WHERE id = %s
+                """,
+                (row["cwd"], row["env"], row["id"]),
+            )
+            row["cwd_snapshot"] = row.pop("cwd")
+            row["env_snapshot"] = row.pop("env")
             logging.info("Fetched command %s for user %s", row["id"], row["user_id"])
         conn.commit()
         return row
@@ -233,7 +262,27 @@ def run_subprocess(command: str, cwd: str, env_snapshot: Any) -> tuple[int, str]
     return exit_code, text
 
 
+def _release_user_claim(conn, row: Dict[str, Any]) -> None:
+    lock_key = row.get("claim_lock_key")
+    if lock_key is None:
+        return
+    # A command-side database error may have left the transaction aborted;
+    # advisory unlock must still be allowed to run before this worker polls.
+    conn.rollback()
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
+    conn.commit()
+
+
 def handle_command(conn, row: Dict[str, Any]) -> None:
+    """Execute a claimed command and always release its per-user claim."""
+    try:
+        _handle_command(conn, row)
+    finally:
+        _release_user_claim(conn, row)
+
+
+def _handle_command(conn, row: Dict[str, Any]) -> None:
     command = row["command"].strip()
     logging.info(
         "Executing command %s for user %s: %s",
