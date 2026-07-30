@@ -12,8 +12,10 @@ script.
 import json
 import logging
 import os
+import pwd
 import select
 import shlex
+import shutil
 import signal
 import subprocess
 import time
@@ -34,6 +36,8 @@ MAX_OUTPUT_BYTES = int(os.getenv("MAX_OUTPUT_BYTES", "65536"))
 TRUNCATION_SUFFIX = "...[truncated]"
 TERMINATION_GRACE_SECONDS = 0.5
 PIPE_DRAIN_TIMEOUT_SECONDS = 0.5
+RESERVED_COMMAND_ENV = frozenset({"DATABASE_URL", "PG_CONN"})
+DEFAULT_COMMAND_PATH = "/usr/local/bin:/usr/bin:/bin"
 
 
 def _update_channel_config(conn, channel: str) -> None:
@@ -139,14 +143,67 @@ def update_cwd(conn, user_id, cwd: str) -> None:
 
 
 def run_subprocess(command: str, cwd: str, env_snapshot: Any) -> tuple[int, str]:
-    env: Dict[str, str] = os.environ.copy()
+    # Never inherit the worker's environment: it contains the database DSN and
+    # may contain unrelated orchestration credentials.
+    env: Dict[str, str] = {
+        "PATH": os.getenv("EXECUTOR_PATH", DEFAULT_COMMAND_PATH),
+        "LANG": os.getenv("EXECUTOR_LANG", "C.UTF-8"),
+        "LC_ALL": os.getenv("EXECUTOR_LC_ALL", "C.UTF-8"),
+    }
     if env_snapshot:
         if isinstance(env_snapshot, str):
-            env.update(json.loads(env_snapshot))
+            snapshot = json.loads(env_snapshot)
         else:
-            env.update(env_snapshot)
+            snapshot = env_snapshot
+        if not isinstance(snapshot, dict):
+            raise ValueError("env_snapshot must be a JSON object")
+        reserved = RESERVED_COMMAND_ENV.intersection(snapshot)
+        if reserved:
+            names = ", ".join(sorted(reserved))
+            raise ValueError(f"reserved environment variable(s): {names}")
+        if not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in snapshot.items()
+        ):
+            raise ValueError("env_snapshot keys and values must be strings")
+        env.update(snapshot)
 
     cmd_list = shlex.split(command)
+    if not cmd_list:
+        raise ValueError("command must not be empty")
+
+    allowed_setting = os.getenv("EXECUTOR_ALLOWED_COMMANDS", "")
+    allowed = {
+        os.path.realpath(path)
+        for path in allowed_setting.split(os.pathsep)
+        if path
+    }
+    executable = shutil.which(cmd_list[0], path=env["PATH"])
+    resolved_executable = os.path.realpath(executable) if executable else None
+    if resolved_executable not in allowed:
+        raise PermissionError(
+            f"command is not in EXECUTOR_ALLOWED_COMMANDS: {cmd_list[0]}"
+        )
+    cmd_list[0] = resolved_executable
+
+    executor_user = os.getenv("EXECUTOR_USER")
+    if not executor_user:
+        raise RuntimeError("EXECUTOR_USER must name a dedicated unprivileged account")
+    account = pwd.getpwnam(executor_user)
+    if account.pw_uid == 0:
+        raise RuntimeError("EXECUTOR_USER must be unprivileged")
+    if os.geteuid() != 0 and os.geteuid() != account.pw_uid:
+        raise PermissionError("worker cannot switch to EXECUTOR_USER")
+
+    def demote() -> None:
+        if os.geteuid() == 0:
+            os.setgroups([])
+            os.setgid(account.pw_gid)
+            os.setuid(account.pw_uid)
+
+    env.update(
+        {"HOME": account.pw_dir, "USER": account.pw_name, "LOGNAME": account.pw_name}
+    )
     proc = subprocess.Popen(
         cmd_list,
         cwd=cwd,
@@ -154,6 +211,7 @@ def run_subprocess(command: str, cwd: str, env_snapshot: Any) -> tuple[int, str]
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=os.name == "posix",
+        preexec_fn=demote if os.name == "posix" else None,
     )
 
     deadline = time.monotonic() + COMMAND_TIMEOUT

@@ -60,6 +60,42 @@ Set `COMMAND_TIMEOUT` (seconds) to limit how long each command may run.
 Commands are parsed with `shlex.split` before execution, so quoting rules follow
 POSIX shells but features like glob expansion are not performed.
 
+### Executor trust model and sandbox configuration
+
+Database users who can submit commands are **untrusted**. The executor worker,
+its PostgreSQL credentials, and the host outside `SHELL_ROOT` are trusted and
+must not be accessible to submitted commands. `run_subprocess` therefore builds
+a new environment containing only a fixed `PATH`, locale, the command account's
+identity variables, and values saved in `env_snapshot`. It never copies the
+worker environment, and rejects `DATABASE_URL` and `PG_CONN` even if a snapshot
+contains them.
+
+Production deployments must create a dedicated, unprivileged OS account and
+configure an absolute-path executable allowlist. The allowlist is the required
+process isolation boundary in the default deployment; commands not on it are
+rejected before execution. Run the worker as root only when it must switch to
+the command account (supplementary groups are cleared before `setuid`), or run
+the worker itself as that account:
+
+```bash
+useradd --system --create-home --home-dir /home/pg-shell-command pg-shell-command
+export EXECUTOR_USER=pg-shell-command
+export EXECUTOR_ALLOWED_COMMANDS=/usr/bin/printf:/usr/bin/python3
+export SHELL_ROOT=/home/pg-shell-command
+DATABASE_URL=postgresql://localhost/postgres python workers/executor_agent.py
+```
+
+Keep the allowlist minimal and ensure every allowed program and its libraries
+are not writable by the command account. Programs that can launch other
+processes, load arbitrary code, or read arbitrary paths (including Python) are
+not a security boundary and must not be allowed for untrusted tenants. A
+deployment needing those tools must add a stronger boundary (for example a
+rootless container or namespace sandbox with a read-only root filesystem,
+network disabled, capability dropping, resource limits, and only `SHELL_ROOT`
+mounted writable). `EXECUTOR_PATH`, `EXECUTOR_LANG`, and `EXECUTOR_LC_ALL` may
+override command defaults; these worker settings are used to construct the
+command environment rather than inherited wholesale.
+
 You can run `cleanup_agent.py` periodically. Command retention applies only to
 terminal statuses: `done` and `failed` commands older than `CLEANUP_DAYS` are
 deleted, while recent terminal commands and all `pending` or `running` commands

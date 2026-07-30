@@ -1,9 +1,35 @@
 import os
+import pwd
+import shutil
 import time
 
 import pytest
 import workers.executor_agent
 from workers.executor_agent import run_subprocess, handle_command
+
+
+@pytest.fixture(autouse=True)
+def configured_executor(monkeypatch, tmp_path):
+    """Use the test runner account while exercising the production controls."""
+    account = pwd.getpwuid(os.geteuid())
+    if account.pw_uid == 0:
+        account = pwd.getpwnam("nobody")
+        tmp_path.chmod(0o777)
+        parent = tmp_path.parent
+        while parent != parent.parent and parent != parent.parent.parent:
+            parent.chmod(0o755)
+            if parent == tmp_path.parents[2]:
+                break
+            parent = parent.parent
+    monkeypatch.setenv("EXECUTOR_USER", account.pw_name)
+    command_path = workers.executor_agent.DEFAULT_COMMAND_PATH
+    commands = [
+        shutil.which("python3", path=command_path),
+        shutil.which("sleep", path=command_path),
+    ]
+    monkeypatch.setenv(
+        "EXECUTOR_ALLOWED_COMMANDS", os.pathsep.join(filter(None, commands))
+    )
 
 
 def test_run_subprocess_combines_output(tmp_path):
@@ -80,6 +106,29 @@ def test_run_subprocess_passes_env_snapshot(monkeypatch, tmp_path):
     exit_code, output = run_subprocess(cmd, str(tmp_path), {"PGS_TEST_VAR": "hello"})
     assert exit_code == 0
     assert "hello" in output
+
+
+def test_run_subprocess_does_not_expose_worker_secrets(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKER_API_SECRET", "worker-only")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://secret")
+    script = (
+        'import os;print(os.getenv("WORKER_API_SECRET"));'
+        'print(os.getenv("DATABASE_URL"))'
+    )
+    cmd = f"python3 -c '{script}'"
+
+    exit_code, output = run_subprocess(cmd, str(tmp_path), None)
+
+    assert exit_code == 0
+    assert output.splitlines() == ["None", "None"]
+
+
+@pytest.mark.parametrize("reserved", ["DATABASE_URL", "PG_CONN"])
+def test_run_subprocess_rejects_reserved_snapshot_variables(
+    monkeypatch, tmp_path, reserved
+):
+    with pytest.raises(ValueError, match="reserved environment variable"):
+        run_subprocess("python3 -c 'pass'", str(tmp_path), {reserved: "secret"})
 
 
 def test_handle_command_uses_combined_output(monkeypatch):
@@ -342,7 +391,7 @@ def test_handle_command_missing_binary_marks_failed(monkeypatch, tmp_path):
 
     assert captured['status'] == 'failed'
     assert captured['exit_code'] == 1
-    assert 'No such file or directory' in captured['output']
+    assert 'not in EXECUTOR_ALLOWED_COMMANDS' in captured['output']
 
 
 def test_main_closes_connection_on_keyboard_interrupt(monkeypatch):
