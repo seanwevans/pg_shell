@@ -51,7 +51,7 @@ CREATE INDEX commands_user_id_id_idx ON commands (user_id, id);
 - Requires `user_id` to already exist in `users`; raises SQLSTATE `22023` with a user-friendly error for unknown users
 - Returns `commands.id`
 
-### `latest_output(user_id UUID) RETURNS TABLE(id, command, output, exit_code, status, submitted_at)`
+### `latest_output(p_user_id UUID, p_since_id INTEGER DEFAULT 0) RETURNS TABLE(id, command, output, exit_code, status, submitted_at, completed_at)`
 
 - Returns last *N* commands for user
 
@@ -85,7 +85,7 @@ Execution must:
 ## 4. REST Interface (via PostgREST)
 
 - `POST /rpc/submit_command`
-- `GET /rpc/latest_output?p_user_id=eq.{uuid}`
+- `GET /rpc/latest_output?p_user_id={uuid}&p_since_id=0`
 - `POST /rpc/fork_session`
 
 Requests/responses in JSON.
@@ -98,7 +98,7 @@ Requests/responses in JSON.
 
 ```html
 <div id="output"
-  hx-get="/rpc/latest_output?p_user_id=eq.USER_ID"
+  hx-get="/rpc/latest_output?p_user_id=USER_ID"
   hx-trigger="load, every 1s"
   hx-swap="innerHTML">
 </div>
