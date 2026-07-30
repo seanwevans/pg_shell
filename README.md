@@ -30,7 +30,7 @@ The frontend is a simple HTML+htmx app; no JavaScript-heavy terminal emulators, 
 **Requirements:**
 - PostgreSQL ≥13
 - PostgREST or compatible HTTP gateway
-- htmx (via CDN)
+- htmx (version-pinned assets are included under `html/vendor/`)
 - Shell execution C binary or trusted extension
 
 **1. Create database schema & extensions**

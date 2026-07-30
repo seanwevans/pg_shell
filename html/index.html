@@ -2,22 +2,24 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'" />
   <title>pg_shell</title>
-  <script src="https://unpkg.com/htmx.org@1.9.6"></script>
-  <script src="https://unpkg.com/htmx.org/dist/ext/json-enc.js"></script>
+  <script defer src="vendor/htmx-1.9.12.min.js"></script>
+  <script defer src="vendor/json-enc-1.9.12.js"></script>
+  <script defer src="app.js"></script>
 </head>
 <body>
 <div id="output"
   hx-get="/rpc/latest_output?p_user_id=USER_ID"
   hx-trigger="load, every 1s"
-  hx-swap="innerHTML">
+  hx-swap="none">
 </div>
 
 <form
   hx-post="/rpc/submit_command"
   hx-trigger="submit from:form"
   hx-target="#output"
-  hx-swap="beforeend"
+  hx-swap="none"
   hx-ext="json-enc"
   hx-encoding="json"
 >
