@@ -15,6 +15,7 @@ import os
 import select
 import shlex
 import signal
+import socket
 import subprocess
 import time
 from typing import Any, Dict
@@ -29,6 +30,9 @@ DEFAULT_LISTEN_CHANNEL = "new_command"
 LISTEN_CHANNEL_ENV = os.getenv("LISTEN_CHANNEL")
 LISTEN_CHANNEL = LISTEN_CHANNEL_ENV or DEFAULT_LISTEN_CHANNEL
 COMMAND_TIMEOUT = int(os.getenv("COMMAND_TIMEOUT", "30"))
+CLAIM_LEASE_SECONDS = int(os.getenv("CLAIM_LEASE_SECONDS", str(COMMAND_TIMEOUT + 10)))
+MAX_COMMAND_ATTEMPTS = int(os.getenv("MAX_COMMAND_ATTEMPTS", "3"))
+WORKER_ID = os.getenv("EXECUTOR_WORKER_ID") or f"{socket.gethostname()}:{os.getpid()}"
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 MAX_OUTPUT_BYTES = int(os.getenv("MAX_OUTPUT_BYTES", "65536"))
 TRUNCATION_SUFFIX = "...[truncated]"
@@ -100,21 +104,69 @@ def wait_for_notify(conn, timeout: float) -> None:
 
 
 def fetch_pending(conn) -> Dict[str, Any] | None:
+    """Atomically claim pending or lease-expired work for this worker.
+
+    An expired claim consumes an attempt. Once the configured limit has been
+    reached, it is terminally failed instead of being executed indefinitely.
+    """
+    if CLAIM_LEASE_SECONDS <= 0:
+        raise ValueError("CLAIM_LEASE_SECONDS must be greater than zero")
+    if MAX_COMMAND_ATTEMPTS <= 0:
+        raise ValueError("MAX_COMMAND_ATTEMPTS must be greater than zero")
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute("BEGIN;")
+        if conn.autocommit:
+            raise ValueError("fetch_pending requires autocommit to be disabled")
         cur.execute(
             """
-            SELECT id, user_id, command, cwd_snapshot, env_snapshot
-            FROM commands
-            WHERE status = 'pending'
-            ORDER BY submitted_at
-            FOR UPDATE SKIP LOCKED
-            LIMIT 1
+            UPDATE commands
+            SET status = 'failed',
+                output = %s,
+                exit_code = 1,
+                completed_at = now(),
+                claimed_at = NULL,
+                lease_expires_at = NULL,
+                claimed_by = NULL
+            WHERE status = 'running'
+              AND (lease_expires_at IS NULL OR lease_expires_at <= now())
+              AND attempt_count >= %s
+            """,
+            (
+                f"Execution claim expired after {MAX_COMMAND_ATTEMPTS} attempts; "
+                "command was not retried again",
+                MAX_COMMAND_ATTEMPTS,
+            ),
+        )
+        cur.execute(
             """
+            WITH candidate AS (
+              SELECT id
+              FROM commands
+              WHERE (status = 'pending'
+                     OR (status = 'running' AND
+                         (lease_expires_at IS NULL OR lease_expires_at <= now())))
+                AND attempt_count < %s
+              ORDER BY submitted_at
+              FOR UPDATE SKIP LOCKED
+              LIMIT 1
+            )
+            UPDATE commands AS command
+            SET status = 'running',
+                claimed_at = now(),
+                lease_expires_at = now() + (%s * interval '1 second'),
+                claimed_by = %s,
+                attempt_count = command.attempt_count + 1,
+                completed_at = NULL
+            FROM candidate
+            WHERE command.id = candidate.id
+            RETURNING command.id, command.user_id, command.command,
+                      command.cwd_snapshot, command.env_snapshot,
+                      command.claimed_at, command.lease_expires_at,
+                      command.claimed_by, command.attempt_count
+            """,
+            (MAX_COMMAND_ATTEMPTS, CLAIM_LEASE_SECONDS, WORKER_ID),
         )
         row = cur.fetchone()
         if row:
-            cur.execute("UPDATE commands SET status='running' WHERE id=%s", (row["id"],))
             logging.info("Fetched command %s for user %s", row["id"], row["user_id"])
         conn.commit()
         return row
@@ -123,7 +175,10 @@ def fetch_pending(conn) -> Dict[str, Any] | None:
 def update_command(conn, cmd_id: int, status: str, output: str, exit_code: int) -> None:
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE commands SET status=%s, output=%s, exit_code=%s, completed_at=now() WHERE id=%s",
+            """UPDATE commands
+               SET status=%s, output=%s, exit_code=%s, completed_at=now(),
+                   claimed_at=NULL, lease_expires_at=NULL, claimed_by=NULL
+               WHERE id=%s""",
             (status, output, exit_code, cmd_id),
         )
     conn.commit()

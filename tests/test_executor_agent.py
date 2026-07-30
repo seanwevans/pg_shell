@@ -3,7 +3,78 @@ import time
 
 import pytest
 import workers.executor_agent
-from workers.executor_agent import run_subprocess, handle_command
+from workers.executor_agent import fetch_pending, run_subprocess, handle_command, update_command
+
+
+class _ClaimCursor:
+    def __init__(self, row=None):
+        self.row = row
+        self.executions = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def execute(self, query, params=None):
+        self.executions.append((query, params))
+
+    def fetchone(self):
+        return self.row
+
+
+class _ClaimConnection:
+    autocommit = False
+
+    def __init__(self, row=None):
+        self.cursor_instance = _ClaimCursor(row)
+        self.commits = 0
+
+    def cursor(self, **kwargs):
+        return self.cursor_instance
+
+    def commit(self):
+        self.commits += 1
+
+
+def test_fetch_pending_claim_is_concurrency_safe_and_includes_stale_leases(monkeypatch):
+    row = {"id": 7, "user_id": "u", "attempt_count": 2}
+    conn = _ClaimConnection(row)
+    monkeypatch.setattr(workers.executor_agent, "CLAIM_LEASE_SECONDS", 15)
+    monkeypatch.setattr(workers.executor_agent, "MAX_COMMAND_ATTEMPTS", 3)
+    monkeypatch.setattr(workers.executor_agent, "WORKER_ID", "worker-test")
+
+    assert fetch_pending(conn) == row
+
+    claim_sql, params = conn.cursor_instance.executions[1]
+    assert "FOR UPDATE SKIP LOCKED" in claim_sql
+    assert "lease_expires_at IS NULL OR lease_expires_at <= now()" in claim_sql
+    assert "attempt_count = command.attempt_count + 1" in claim_sql
+    assert params == (3, 15, "worker-test")
+    assert conn.commits == 1
+
+
+def test_fetch_pending_exhausted_retry_has_diagnostic(monkeypatch):
+    conn = _ClaimConnection()
+    monkeypatch.setattr(workers.executor_agent, "MAX_COMMAND_ATTEMPTS", 4)
+
+    assert fetch_pending(conn) is None
+
+    reclaim_sql, params = conn.cursor_instance.executions[0]
+    assert "status = 'failed'" in reclaim_sql
+    assert "lease_expires_at = NULL" in reclaim_sql
+    assert "4 attempts" in params[0]
+
+
+def test_update_command_clears_claim_metadata():
+    conn = _ClaimConnection()
+    update_command(conn, 9, "done", "ok", 0)
+    query, params = conn.cursor_instance.executions[0]
+    assert "claimed_at=NULL" in query
+    assert "lease_expires_at=NULL" in query
+    assert "claimed_by=NULL" in query
+    assert params == ("done", "ok", 0, 9)
 
 
 def test_run_subprocess_combines_output(tmp_path):

@@ -7,8 +7,31 @@ the unit tests in ``test_executor_agent.py`` stub out. They require
 """
 
 import uuid
+from pathlib import Path
+
+import psycopg2
 
 from workers.executor_agent import fetch_pending, handle_command
+
+
+def test_execution_claim_migration_is_idempotent(db_conn):
+    migration = Path("sql/migrate_execution_claims.sql").read_text()
+    with db_conn.cursor() as cur:
+        cur.execute(migration)
+        cur.execute(migration)
+        cur.execute(
+            """SELECT column_name
+               FROM information_schema.columns
+               WHERE table_name = 'commands'
+                 AND column_name IN
+                     ('claimed_at', 'lease_expires_at', 'claimed_by', 'attempt_count')"""
+        )
+        assert {row[0] for row in cur.fetchall()} == {
+            "claimed_at",
+            "lease_expires_at",
+            "claimed_by",
+            "attempt_count",
+        }
 
 
 def _create_user_with_env(conn, cwd: str) -> str:
@@ -86,3 +109,69 @@ def test_fetch_pending_returns_none_when_idle(db_conn):
         assert fetch_pending(db_conn) is None
     finally:
         db_conn.autocommit = True
+
+
+def test_concurrent_executors_claim_different_commands(db_conn, tmp_path):
+    user_id = _create_user_with_env(db_conn, str(tmp_path))
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT submit_command(%s, 'echo first')", (user_id,))
+        first_id = cur.fetchone()[0]
+        cur.execute("SELECT submit_command(%s, 'echo second')", (user_id,))
+        second_id = cur.fetchone()[0]
+
+    other = psycopg2.connect(db_conn.dsn)
+    db_conn.autocommit = False
+    other.autocommit = False
+    try:
+        first = fetch_pending(db_conn)
+        second = fetch_pending(other)
+        assert {first["id"], second["id"]} == {first_id, second_id}
+    finally:
+        db_conn.rollback()
+        db_conn.autocommit = True
+        other.close()
+
+
+def test_expired_claim_is_retried_then_fails_at_attempt_limit(
+    db_conn, monkeypatch, tmp_path
+):
+    monkeypatch.setattr("workers.executor_agent.MAX_COMMAND_ATTEMPTS", 2)
+    user_id = _create_user_with_env(db_conn, str(tmp_path))
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT submit_command(%s, 'echo stale')", (user_id,))
+        cmd_id = cur.fetchone()[0]
+        cur.execute(
+            """UPDATE commands
+               SET status='running', attempt_count=1,
+                   claimed_at=now() - interval '2 minutes',
+                   lease_expires_at=now() - interval '1 minute',
+                   claimed_by='dead-worker'
+               WHERE id=%s""",
+            (cmd_id,),
+        )
+
+    db_conn.autocommit = False
+    try:
+        reclaimed = fetch_pending(db_conn)
+        assert reclaimed["id"] == cmd_id
+        assert reclaimed["attempt_count"] == 2
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "UPDATE commands SET lease_expires_at=now() - interval '1 second' WHERE id=%s",
+                (cmd_id,),
+            )
+        assert fetch_pending(db_conn) is None
+    finally:
+        db_conn.autocommit = True
+
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT status, output, claimed_at, lease_expires_at, claimed_by FROM commands WHERE id=%s",
+            (cmd_id,),
+        )
+        status, output, claimed_at, lease_expires_at, claimed_by = cur.fetchone()
+    assert status == "failed"
+    assert "2 attempts" in output
+    assert claimed_at is None
+    assert lease_expires_at is None
+    assert claimed_by is None

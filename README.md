@@ -57,6 +57,14 @@ DATABASE_URL=postgresql://localhost/postgres python workers/executor_agent.py
 The executor agent will exit with an error if neither `DATABASE_URL` nor
 `PG_CONN` is set.
 Set `COMMAND_TIMEOUT` (seconds) to limit how long each command may run.
+Each executor claim also has a bounded lease. Configure its duration with
+`CLAIM_LEASE_SECONDS` (the default is `COMMAND_TIMEOUT + 10`) and identify an
+executor with `EXECUTOR_WORKER_ID` (the default is its hostname and process
+ID). After a worker disappears, another executor may retry the command when
+the lease expires. `MAX_COMMAND_ATTEMPTS` defaults to 3; when the final claim
+expires, the command is marked `failed` with an expiration diagnostic rather
+than retried indefinitely. Set the lease longer than the maximum expected
+execution time to avoid concurrent execution of a still-running command.
 Commands are parsed with `shlex.split` before execution, so quoting rules follow
 POSIX shells but features like glob expansion are not performed.
 
