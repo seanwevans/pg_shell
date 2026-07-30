@@ -8,7 +8,12 @@ from workers.db import get_conn
 
 
 def cleanup_once(conn, days: int) -> None:
-    """Remove commands and reset environments older than ``days`` days."""
+    """Remove commands and reset environments older than ``days`` days.
+
+    Replay rows have an independent retention lifetime. Deleting an expired
+    source command clears their ``replay_of_command_id`` through the schema's
+    ``ON DELETE SET NULL`` foreign key, while preserving replay command data.
+    """
     with conn.cursor() as cur:
         cur.execute(
             """

@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS commands (
   id SERIAL PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES users(id),
   command TEXT NOT NULL,
-  replay_of_command_id INT REFERENCES commands(id),
+  -- Replay rows are retained independently of their source command. Once the
+  -- source ages out, its nullable provenance link is cleared.
+  replay_of_command_id INT REFERENCES commands(id) ON DELETE SET NULL,
   replay_run_id UUID,
   submitted_at TIMESTAMP NOT NULL DEFAULT now(),
   status TEXT NOT NULL DEFAULT 'pending',
