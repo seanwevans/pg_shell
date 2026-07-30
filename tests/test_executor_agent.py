@@ -1,3 +1,6 @@
+import os
+import time
+
 import pytest
 import workers.executor_agent
 from workers.executor_agent import run_subprocess, handle_command
@@ -36,6 +39,40 @@ def test_run_subprocess_times_out(monkeypatch, tmp_path):
     exit_code, output = run_subprocess("sleep 5", str(tmp_path), None)
     assert exit_code == 124
     assert "Timed out after 1s" in output
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group signaling is POSIX-specific")
+def test_run_subprocess_timeout_kills_descendant_with_inherited_pipe(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(workers.executor_agent, "COMMAND_TIMEOUT", 1)
+    pid_file = tmp_path / "descendant.pid"
+    script = (
+        "import pathlib, subprocess, time; "
+        "child = subprocess.Popen(['sleep', '30']); "
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(child.pid)); "
+        "time.sleep(30)"
+    )
+
+    started = time.monotonic()
+    exit_code, output = run_subprocess(
+        f"python3 -c {script!r}", str(tmp_path), None
+    )
+    elapsed = time.monotonic() - started
+
+    assert exit_code == 124
+    assert "Timed out after 1s" in output
+    assert elapsed < 3
+    descendant_pid = int(pid_file.read_text())
+    status_file = f"/proc/{descendant_pid}/status"
+    for _ in range(20):
+        if not os.path.exists(status_file):
+            break
+        if "State:\tZ" in open(status_file).read():
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail(f"descendant process {descendant_pid} is still running")
 
 
 def test_run_subprocess_passes_env_snapshot(monkeypatch, tmp_path):

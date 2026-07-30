@@ -18,7 +18,7 @@ def cleanup_once(conn, days: int) -> None:
         cur.execute(
             """
             DELETE FROM commands
-             WHERE status = 'done'
+             WHERE status IN ('done', 'failed')
                AND submitted_at < now() - %s * interval '1 day'
             RETURNING id
             """,
@@ -41,21 +41,36 @@ def cleanup_once(conn, days: int) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Cleanup old commands and environments")
-    parser.add_argument(
-        "--interval", type=int, default=3600,
-        help="Seconds between cleanup runs (default: 3600)"
+    parser = argparse.ArgumentParser(
+        description="Cleanup old commands and environments"
     )
     parser.add_argument(
-        "--once", action="store_true", help="Run cleanup once and exit"
+        "--interval",
+        type=int,
+        default=3600,
+        help="Seconds between cleanup runs (default: 3600)",
     )
+    parser.add_argument("--once", action="store_true", help="Run cleanup once and exit")
     parser.add_argument(
         "--days",
         type=int,
-        default=int(os.getenv("CLEANUP_DAYS", "90")),
+        default=None,
         help="Age threshold in days (default: 90)",
     )
     args = parser.parse_args()
+
+    if args.days is None:
+        cleanup_days = os.getenv("CLEANUP_DAYS", "90")
+        try:
+            args.days = int(cleanup_days)
+        except ValueError:
+            parser.error(f"CLEANUP_DAYS must be an integer (got {cleanup_days!r})")
+
+    if args.days <= 0:
+        parser.error("--days must be a positive integer")
+    if args.interval <= 0:
+        parser.error("--interval must be a positive integer")
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     while True:
