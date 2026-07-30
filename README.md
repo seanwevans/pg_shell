@@ -76,6 +76,15 @@ cd html && python3 -m http.server 8080
 
 When running PostgREST you can also point `server-static-path` to this
 folder so the UI is served alongside your RPC endpoints.
+
+Poll a user's output by passing the RPC arguments directly. PostgREST casts
+the plain UUID and integer values to the `latest_output(UUID, INTEGER)`
+function parameters:
+
+```bash
+curl "http://localhost:3000/rpc/latest_output?p_user_id=00000000-0000-0000-0000-000000000000&p_since_id=0"
+```
+
 ## Running Tests
 
 Tests require a PostgreSQL database. Set `TEST_DATABASE_URL` to a DSN with privileges to create tables. Then run:

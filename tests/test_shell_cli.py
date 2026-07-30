@@ -209,7 +209,7 @@ def test_tail_output_waits_for_terminal_status(monkeypatch, capsys):
     ]
 
     assert call_params == [
-        {'p_user_id': 'eq.u1'},
-        {'p_user_id': 'eq.u1'},
-        {'p_user_id': 'eq.u1', 'p_since_id': 1},
+        {'p_user_id': 'u1'},
+        {'p_user_id': 'u1'},
+        {'p_user_id': 'u1', 'p_since_id': 1},
     ]
