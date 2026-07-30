@@ -60,9 +60,11 @@ Set `COMMAND_TIMEOUT` (seconds) to limit how long each command may run.
 Commands are parsed with `shlex.split` before execution, so quoting rules follow
 POSIX shells but features like glob expansion are not performed.
 
-You can run `cleanup_agent.py` periodically and use `replay_agent.py` for
-
-session replays. The optional `monitor_agent.py` emits usage metrics like
+You can run `cleanup_agent.py` periodically. Command retention applies only to
+terminal statuses: `done` and `failed` commands older than `CLEANUP_DAYS` are
+deleted, while recent terminal commands and all `pending` or `running` commands
+are retained. Use `replay_agent.py` for session replays. The optional
+`monitor_agent.py` emits usage metrics like
 command counts and average run time to stdout or CSV.
 
 ## Serving the HTML UI
