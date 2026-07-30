@@ -216,7 +216,7 @@ def test_handle_command_cd_absolute_outside_root_fails(tmp_path, monkeypatch):
     assert 'Permission denied' in captured['output']
 
 
-def test_handle_command_cd_with_extra_args_runs_subprocess(monkeypatch):
+def test_handle_command_cd_with_extra_args_is_rejected(monkeypatch):
     captured: dict = {}
 
     def fake_run_subprocess(command, cwd, env):
@@ -245,9 +245,10 @@ def test_handle_command_cd_with_extra_args_runs_subprocess(monkeypatch):
 
     handle_command(None, row)
 
-    assert captured['command'] == 'cd /tmp extra'
-    assert captured['status'] == 'done'
-    assert captured['exit_code'] == 0
+    assert 'command' not in captured
+    assert captured['status'] == 'failed'
+    assert captured['exit_code'] == 126
+    assert 'unsupported executable' in captured['output']
 
 
 def test_handle_command_malformed_command(monkeypatch):
@@ -304,8 +305,53 @@ def test_handle_command_missing_binary_marks_failed(monkeypatch, tmp_path):
     handle_command(None, row)
 
     assert captured['status'] == 'failed'
-    assert captured['exit_code'] == 1
-    assert 'No such file or directory' in captured['output']
+    assert captured['exit_code'] == 126
+    assert 'Command rejected by executor policy' in captured['output']
+
+
+def test_allowed_command_is_started(monkeypatch, tmp_path):
+    monkeypatch.setenv('ALLOWED_EXECUTABLES', 'echo')
+    exit_code, output = run_subprocess('echo allowed', str(tmp_path), None)
+    assert exit_code == 0
+    assert output == 'allowed\n'
+
+
+@pytest.mark.parametrize('command', ['uname', '/bin/echo bypass', './echo bypass'])
+def test_disallowed_executable_and_path_bypasses_are_rejected(
+    monkeypatch, tmp_path, command
+):
+    monkeypatch.setenv('ALLOWED_EXECUTABLES', 'echo')
+    with pytest.raises(workers.executor_agent.UnsupportedCommand):
+        run_subprocess(command, str(tmp_path), None)
+
+
+def test_resource_outside_shell_root_is_rejected(monkeypatch, tmp_path):
+    monkeypatch.setenv('ALLOWED_EXECUTABLES', 'cat')
+    monkeypatch.setenv('SHELL_ROOT', str(tmp_path))
+    with pytest.raises(workers.executor_agent.UnsupportedCommand) as exc:
+        run_subprocess('cat /etc/passwd', str(tmp_path), None)
+    assert 'outside SHELL_ROOT' in str(exc.value)
+
+
+def test_handle_command_records_policy_rejection(monkeypatch, tmp_path):
+    captured = {}
+    monkeypatch.setenv('ALLOWED_EXECUTABLES', 'echo')
+    monkeypatch.setattr(
+        workers.executor_agent,
+        'update_command',
+        lambda conn, cmd_id, status, output, exit_code: captured.update(
+            status=status, output=output, exit_code=exit_code
+        ),
+    )
+    handle_command(None, {
+        'id': 8, 'user_id': 'u1', 'command': 'uname -a',
+        'cwd_snapshot': str(tmp_path), 'env_snapshot': None,
+    })
+    assert captured == {
+        'status': 'failed',
+        'output': 'Command rejected by executor policy: unsupported executable.',
+        'exit_code': 126,
+    }
 
 
 def test_main_closes_connection_on_keyboard_interrupt(monkeypatch):

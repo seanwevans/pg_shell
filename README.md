@@ -60,6 +60,34 @@ Set `COMMAND_TIMEOUT` (seconds) to limit how long each command may run.
 Commands are parsed with `shlex.split` before execution, so quoting rules follow
 POSIX shells but features like glob expansion are not performed.
 
+### Executor command and isolation policy
+
+The executor does **not** provide an unrestricted shell. `ALLOWED_EXECUTABLES`
+is a comma-separated allowlist of executable names (not paths); it defaults to
+`cat,echo,false,head,ls,printf,pwd,python3,sleep,tail,true,wc`. Commands using an
+unsupported name, an absolute/relative executable path, or an explicit resource
+path outside `SHELL_ROOT` are rejected before process creation and recorded as
+`failed` with exit code 126. `EXECUTOR_PATH` (default `/usr/bin:/bin`) is trusted
+administrator configuration and cannot be overridden by a stored environment
+snapshot. `cd` is the only built-in and is confined to `SHELL_ROOT`.
+
+Each child receives address-space and process-count limits, configurable with
+`COMMAND_MEMORY_BYTES` (default 256 MiB) and `COMMAND_MAX_PROCESSES` (default
+32). In production, set `EXECUTOR_UID` and `EXECUTOR_GID` to a dedicated,
+unprivileged OS account; UID 0 is refused. `EXECUTOR_CHROOT` optionally enters a
+prepared chroot containing the allowlisted binaries and their libraries before
+dropping privileges.
+
+The allowlist and argument checks are defense in depth, **not a complete
+sandbox**: an allowed program (especially an interpreter) can access paths that
+do not appear as plain command arguments. Deploy the worker in a dedicated
+container or VM with a read-only root filesystem, only `SHELL_ROOT` mounted
+writable, no host mounts or credentials, no-new-privileges/capabilities dropped,
+seccomp syscall filtering, cgroup CPU/memory/PID limits, and network access
+denied unless explicitly required. For stronger local isolation, populate and
+enable `EXECUTOR_CHROOT`; container/VM isolation is still required for hostile
+multi-tenant workloads.
+
 You can run `cleanup_agent.py` periodically and use `replay_agent.py` for
 
 session replays. The optional `monitor_agent.py` emits usage metrics like

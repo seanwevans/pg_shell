@@ -12,6 +12,7 @@ script.
 import json
 import logging
 import os
+import resource
 import select
 import shlex
 import subprocess
@@ -31,6 +32,80 @@ COMMAND_TIMEOUT = int(os.getenv("COMMAND_TIMEOUT", "30"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 MAX_OUTPUT_BYTES = int(os.getenv("MAX_OUTPUT_BYTES", "65536"))
 TRUNCATION_SUFFIX = "...[truncated]"
+
+# Commands are executed directly (never through a shell).  Allowlist entries are
+# executable *names*, rather than paths, so `/tmp/ls` cannot masquerade as `ls`.
+# This is a policy boundary, not a replacement for the deployment sandbox; see
+# README.md for the required container/filesystem isolation.
+DEFAULT_ALLOWED_EXECUTABLES = "cat,echo,false,head,ls,printf,pwd,python3,sleep,tail,true,wc"
+REJECTED_COMMAND_MESSAGE = "Command rejected by executor policy"
+
+
+class UnsupportedCommand(ValueError):
+    """Raised before process creation when a command violates policy."""
+
+
+def _allowed_executables() -> set[str]:
+    configured = os.getenv("ALLOWED_EXECUTABLES", DEFAULT_ALLOWED_EXECUTABLES)
+    return {name.strip() for name in configured.split(",") if name.strip()}
+
+
+def validate_command(tokens: list[str], cwd: str) -> None:
+    if not tokens:
+        raise UnsupportedCommand("empty command")
+    executable = tokens[0]
+    if (
+        os.path.basename(executable) != executable
+        or executable not in _allowed_executables()
+    ):
+        raise UnsupportedCommand("unsupported executable")
+
+    # Reject explicit references outside SHELL_ROOT.  This catches common path
+    # traversal mistakes; the OS sandbox remains responsible for indirect access
+    # performed by an allowed interpreter or executable.
+    shell_root_value = os.getenv("SHELL_ROOT")
+    if not shell_root_value:
+        return
+    shell_root = os.path.realpath(shell_root_value)
+    real_cwd = os.path.realpath(cwd)
+    try:
+        if os.path.commonpath([shell_root, real_cwd]) != shell_root:
+            raise UnsupportedCommand("working directory is outside SHELL_ROOT")
+    except ValueError as exc:
+        raise UnsupportedCommand("working directory is outside SHELL_ROOT") from exc
+    for argument in tokens[1:]:
+        if not (argument.startswith("/") or argument == ".." or argument.startswith("../")):
+            continue
+        candidate = os.path.realpath(
+            argument if os.path.isabs(argument) else os.path.join(real_cwd, argument)
+        )
+        try:
+            permitted = os.path.commonpath([shell_root, candidate]) == shell_root
+        except ValueError:
+            permitted = False
+        if not permitted:
+            raise UnsupportedCommand("resource path is outside SHELL_ROOT")
+
+
+def _sandbox_identity_and_limits() -> None:
+    """Apply per-process identity, resource, and optional chroot controls."""
+    chroot = os.getenv("EXECUTOR_CHROOT")
+    if chroot:
+        os.chroot(chroot)
+        os.chdir("/")
+    gid = os.getenv("EXECUTOR_GID")
+    uid = os.getenv("EXECUTOR_UID")
+    if gid:
+        os.setgroups([])
+        os.setgid(int(gid))
+    if uid:
+        if int(uid) == 0:
+            raise RuntimeError("EXECUTOR_UID must not be root")
+        os.setuid(int(uid))
+    memory = int(os.getenv("COMMAND_MEMORY_BYTES", "268435456"))
+    processes = int(os.getenv("COMMAND_MAX_PROCESSES", "32"))
+    resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
+    resource.setrlimit(resource.RLIMIT_NPROC, (processes, processes))
 
 
 def _update_channel_config(conn, channel: str) -> None:
@@ -142,14 +217,21 @@ def run_subprocess(command: str, cwd: str, env_snapshot: Any) -> tuple[int, str]
             env.update(json.loads(env_snapshot))
         else:
             env.update(env_snapshot)
+    # Resolution of an allowed name must use an administrator-controlled path;
+    # user snapshots must not redirect it to a lookalike executable.
+    env["PATH"] = os.getenv("EXECUTOR_PATH", "/usr/bin:/bin")
+    for unsafe_name in ("LD_PRELOAD", "LD_LIBRARY_PATH", "PYTHONPATH", "PYTHONHOME"):
+        env.pop(unsafe_name, None)
 
     cmd_list = shlex.split(command)
+    validate_command(cmd_list, cwd)
     proc = subprocess.Popen(
         cmd_list,
         cwd=cwd,
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        preexec_fn=_sandbox_identity_and_limits,
     )
 
     deadline = time.time() + COMMAND_TIMEOUT
@@ -208,6 +290,15 @@ def handle_command(conn, row: Dict[str, Any]) -> None:
         )
         update_command(conn, row["id"], "failed", str(exc), 1)
         return
+
+    if not (len(tokens) == 2 and tokens[0] == "cd"):
+        try:
+            validate_command(tokens, row["cwd_snapshot"])
+        except UnsupportedCommand as exc:
+            explanation = f"{REJECTED_COMMAND_MESSAGE}: {exc}."
+            logging.warning("Rejected command %s: %s", row["id"], exc)
+            update_command(conn, row["id"], "failed", explanation, 126)
+            return
 
     if len(tokens) == 2 and tokens[0] == "cd":
         path = tokens[1]
