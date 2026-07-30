@@ -76,6 +76,71 @@ def test_cleanup_once_deletes_only_old_completed_commands(conn):
     assert recent_done_id in remaining
 
 
+def test_cleanup_expires_original_but_retains_newer_replay(conn):
+    uid_str = str(uuid.uuid4())
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO users (id, username) VALUES (%s, %s)",
+            (uid_str, "replay-retention-user"),
+        )
+        cur.execute(
+            """
+            INSERT INTO environments (user_id, cwd, env, updated_at)
+            VALUES (%s, '/tmp/stale', '{"stale": true}'::jsonb,
+                    now() - interval '100 days')
+            """,
+            (uid_str,),
+        )
+        cur.execute(
+            """
+            INSERT INTO commands (user_id, command, output, submitted_at, status)
+            VALUES (%s, 'original command', 'original output',
+                    now() - interval '100 days', 'done')
+            RETURNING id
+            """,
+            (uid_str,),
+        )
+        original_id = cur.fetchone()[0]
+        cur.execute(
+            """
+            INSERT INTO commands
+                (user_id, command, output, submitted_at, status,
+                 replay_of_command_id, replay_run_id)
+            VALUES (%s, 'original command', 'replay output', now(), 'done',
+                    %s, %s)
+            RETURNING id
+            """,
+            (uid_str, original_id, str(uuid.uuid4())),
+        )
+        replay_id = cur.fetchone()[0]
+
+    cleanup_once(conn, 90)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, command, output, replay_of_command_id
+              FROM commands
+             WHERE id IN (%s, %s)
+             ORDER BY id
+            """,
+            (original_id, replay_id),
+        )
+        command_rows = cur.fetchall()
+        cur.execute(
+            "SELECT cwd, env FROM environments WHERE user_id = %s",
+            (uid_str,),
+        )
+        environment = cur.fetchone()
+
+    assert command_rows == [
+        (replay_id, "original command", "replay output", None),
+    ]
+    # The later statement in cleanup_once also completed, proving that the
+    # delete did not trigger a foreign-key error and roll back the transaction.
+    assert environment == ("/home/sandbox", {})
+
+
 def test_cleanup_once_resets_env(conn):
     uid_str = str(uuid.uuid4())
     with conn.cursor() as cur:
@@ -127,4 +192,3 @@ def test_cleanup_once_resets_multiple_envs(conn, caplog):
     for cwd, env in rows:
         assert cwd == '/home/sandbox'
         assert env == {}
-
