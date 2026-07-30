@@ -18,7 +18,7 @@ def cleanup_once(conn, days: int) -> None:
         cur.execute(
             """
             DELETE FROM commands
-             WHERE status = 'done'
+             WHERE status IN ('done', 'failed')
                AND submitted_at < now() - %s * interval '1 day'
             RETURNING id
             """,

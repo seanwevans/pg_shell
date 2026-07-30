@@ -35,7 +35,7 @@ def conn():
     conn.close()
 
 
-def test_cleanup_once_deletes_only_old_completed_commands(conn):
+def test_cleanup_once_deletes_only_old_terminal_commands(conn):
     uid_str = str(uuid.uuid4())
     with conn.cursor() as cur:
         cur.execute(
@@ -48,20 +48,41 @@ def test_cleanup_once_deletes_only_old_completed_commands(conn):
             (uid_str,),
         )
         old_done_id = cur.fetchone()[0]
-        # Old but not done -> preserved (cleanup only targets completed history)
+        # Old + failed -> deleted
         cur.execute(
             "INSERT INTO commands (user_id, command, submitted_at, status) "
             "VALUES (%s, 'old-failed', now() - interval '100 days', 'failed') RETURNING id",
             (uid_str,),
         )
         old_failed_id = cur.fetchone()[0]
-        # Recent + done -> preserved (still within retention window)
+        # Recent terminal commands -> preserved (still within retention window)
         cur.execute(
             "INSERT INTO commands (user_id, command, submitted_at, status) "
             "VALUES (%s, 'recent-done', now(), 'done') RETURNING id",
             (uid_str,),
         )
         recent_done_id = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO commands (user_id, command, submitted_at, status) "
+            "VALUES (%s, 'recent-failed', now(), 'failed') RETURNING id",
+            (uid_str,),
+        )
+        recent_failed_id = cur.fetchone()[0]
+        # Non-terminal commands are preserved regardless of age
+        cur.execute(
+            "INSERT INTO commands (user_id, command, submitted_at, status) "
+            "VALUES (%s, 'old-pending', now() - interval '100 days', 'pending') "
+            "RETURNING id",
+            (uid_str,),
+        )
+        old_pending_id = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO commands (user_id, command, submitted_at, status) "
+            "VALUES (%s, 'old-running', now() - interval '100 days', 'running') "
+            "RETURNING id",
+            (uid_str,),
+        )
+        old_running_id = cur.fetchone()[0]
 
     cleanup_once(conn, 90)
 
@@ -72,8 +93,11 @@ def test_cleanup_once_deletes_only_old_completed_commands(conn):
         remaining = [row[0] for row in cur.fetchall()]
 
     assert old_done_id not in remaining
-    assert old_failed_id in remaining
+    assert old_failed_id not in remaining
     assert recent_done_id in remaining
+    assert recent_failed_id in remaining
+    assert old_pending_id in remaining
+    assert old_running_id in remaining
 
 
 def test_cleanup_expires_original_but_retains_newer_replay(conn):
