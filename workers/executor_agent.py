@@ -14,6 +14,7 @@ import logging
 import os
 import select
 import shlex
+import signal
 import subprocess
 import time
 from typing import Any, Dict
@@ -31,6 +32,8 @@ COMMAND_TIMEOUT = int(os.getenv("COMMAND_TIMEOUT", "30"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 MAX_OUTPUT_BYTES = int(os.getenv("MAX_OUTPUT_BYTES", "65536"))
 TRUNCATION_SUFFIX = "...[truncated]"
+TERMINATION_GRACE_SECONDS = 0.5
+PIPE_DRAIN_TIMEOUT_SECONDS = 0.5
 
 
 def _update_channel_config(conn, channel: str) -> None:
@@ -150,19 +153,51 @@ def run_subprocess(command: str, cwd: str, env_snapshot: Any) -> tuple[int, str]
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        start_new_session=os.name == "posix",
     )
 
-    deadline = time.time() + COMMAND_TIMEOUT
+    deadline = time.monotonic() + COMMAND_TIMEOUT
     output = bytearray()
     limit_exceeded = False
     timed_out = False
+    termination_deadline = None
+    drain_deadline = None
     fds = [proc.stdout, proc.stderr]
 
     while fds:
-        if time.time() > deadline and not timed_out:
-            proc.kill()
+        now = time.monotonic()
+        if now >= deadline and not timed_out:
+            if os.name == "posix":
+                try:
+                    os.killpg(proc.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            else:
+                proc.terminate()
             timed_out = True
-        ready, _, _ = select.select(fds, [], [], 0.1)
+            termination_deadline = now + TERMINATION_GRACE_SECONDS
+        elif (
+            termination_deadline is not None
+            and now >= termination_deadline
+            and drain_deadline is None
+        ):
+            if os.name == "posix":
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            elif proc.poll() is None:
+                proc.kill()
+            drain_deadline = now + PIPE_DRAIN_TIMEOUT_SECONDS
+
+        if drain_deadline is not None and now >= drain_deadline:
+            break
+
+        next_event = deadline if not timed_out else termination_deadline
+        if drain_deadline is not None:
+            next_event = drain_deadline
+        select_timeout = max(0.0, min(0.1, next_event - now))
+        ready, _, _ = select.select(fds, [], [], select_timeout)
         for fd in ready:
             chunk = fd.read1(4096)
             if not chunk:
@@ -178,7 +213,16 @@ def run_subprocess(command: str, cwd: str, env_snapshot: Any) -> tuple[int, str]
             else:
                 limit_exceeded = True
 
-    proc.wait()
+    for fd in fds:
+        fd.close()
+    if timed_out:
+        try:
+            proc.wait(timeout=TERMINATION_GRACE_SECONDS + PIPE_DRAIN_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+    else:
+        proc.wait()
     exit_code = proc.returncode
     text = output.decode(errors="replace")
     if timed_out:
