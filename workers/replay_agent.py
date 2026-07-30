@@ -25,8 +25,9 @@ def replay_commands(
             history_cur.execute(
                 """
                 SELECT id, command
-                  FROM commands
+                 FROM commands
                  WHERE user_id = %s AND id >= %s
+                   AND replay_of_command_id IS NULL
               ORDER BY id ASC
                 """,
                 (user_id, start_id),

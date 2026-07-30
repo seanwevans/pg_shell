@@ -6,6 +6,7 @@ import workers.replay_agent as replay_agent
 
 class FakeHistoryCursor:
     def __init__(self, rows):
+        self.all_rows = rows
         self.rows = rows
         self.index = 0
         self.fetchmany_calls = []
@@ -19,6 +20,10 @@ class FakeHistoryCursor:
 
     def execute(self, query, params=None):
         self.execute_calls.append((query, params))
+        if "replay_of_command_id IS NULL" in query:
+            self.rows = [
+                row for row in self.all_rows if row.get("replay_of_command_id") is None
+            ]
 
     def fetchmany(self, size):
         self.fetchmany_calls.append(size)
@@ -193,3 +198,68 @@ def test_replay_commands_first_run_then_resume_enqueues_zero_new_rows(monkeypatc
         if query.strip().startswith("SELECT submit_command")
     ]
     assert second_submit_calls == []
+
+
+def _mixed_history():
+    return [
+        {"id": 1, "command": "original one", "replay_of_command_id": None},
+        {"id": 2, "command": "replay of one", "replay_of_command_id": 1},
+        {"id": 3, "command": "original two", "replay_of_command_id": None},
+        {"id": 4, "command": "replay of two", "replay_of_command_id": 3},
+    ]
+
+
+def _submitted_source_ids(submit_conn):
+    return [
+        params[2]
+        for query, params in submit_conn.cursor_obj.execute_calls
+        if query.strip().startswith("SELECT submit_command")
+    ]
+
+
+def test_replay_commands_only_submits_original_commands(monkeypatch):
+    history_conn = FakeHistoryConn(_mixed_history())
+    submit_conn = FakeSubmitConn()
+    monkeypatch.setattr(
+        replay_agent, "get_conn", FakeConnFactory(history_conn, submit_conn)
+    )
+
+    replay_agent.replay_commands("u1", 1)
+
+    assert _submitted_source_ids(submit_conn) == [1, 3]
+
+
+def test_replay_commands_resume_only_checks_and_submits_originals(monkeypatch):
+    history_conn = FakeHistoryConn(_mixed_history())
+    submit_conn = FakeSubmitConn(already_replayed={1})
+    monkeypatch.setattr(
+        replay_agent, "get_conn", FakeConnFactory(history_conn, submit_conn)
+    )
+
+    replay_agent.replay_commands("u1", 1, resume=True)
+
+    assert _submitted_source_ids(submit_conn) == [3]
+    resume_source_ids = [
+        params[1]
+        for query, params in submit_conn.cursor_obj.execute_calls
+        if "FROM commands" in query
+    ]
+    assert resume_source_ids == [1, 3]
+
+
+def test_replay_commands_force_duplicates_originals_without_replaying_generated_rows(
+    monkeypatch,
+):
+    history_conn = FakeHistoryConn(_mixed_history())
+    submit_conn = FakeSubmitConn(already_replayed={1, 3})
+    monkeypatch.setattr(
+        replay_agent, "get_conn", FakeConnFactory(history_conn, submit_conn)
+    )
+
+    replay_agent.replay_commands("u1", 1, force=True)
+
+    assert _submitted_source_ids(submit_conn) == [1, 3]
+    assert all(
+        "FROM commands" not in query
+        for query, _ in submit_conn.cursor_obj.execute_calls
+    )
