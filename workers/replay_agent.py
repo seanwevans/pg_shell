@@ -86,7 +86,7 @@ def replay_commands(
                 logging.info("Skipped %d commands already replayed", skipped)
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description="Replay user commands")
     parser.add_argument("--user", required=True, help="User ID")
     parser.add_argument(
@@ -108,9 +108,12 @@ def main() -> None:
         default=100,
         help="Commit after this many submitted replay rows",
     )
-    args = parser.parse_args()
-    if args.commit_every <= 0:
-        parser.error("--commit-every must be greater than zero")
+    try:
+        args = parser.parse_args()
+        if args.commit_every <= 0:
+            parser.error("--commit-every must be greater than zero")
+    except SystemExit as exc:
+        return int(exc.code or 0)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     try:
         replay_commands(
@@ -122,9 +125,15 @@ def main() -> None:
         )
     except ValueError as exc:
         logging.error("Replay agent argument error: %s", exc)
+        return 1
     except RuntimeError as exc:
         logging.error("Replay agent failed to connect to database: %s", exc)
+        return 1
+    except Exception:
+        logging.exception("Replay agent failed during database operation")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

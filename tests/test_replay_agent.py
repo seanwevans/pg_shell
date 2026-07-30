@@ -1,6 +1,8 @@
 import logging
 import math
+import sys
 
+import psycopg2
 import workers.replay_agent as replay_agent
 
 
@@ -103,6 +105,53 @@ class FakeConnFactory:
         if not self._connections:
             raise AssertionError("get_conn called more times than expected")
         return self._connections.pop(0)
+
+
+def test_main_returns_zero_after_successful_replay(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["replay_agent.py", "--user", "u1", "--start", "1"])
+    monkeypatch.setattr(replay_agent, "replay_commands", lambda *args, **kwargs: None)
+
+    assert replay_agent.main() == 0
+
+
+def test_main_returns_nonzero_for_invalid_option(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "replay_agent.py",
+            "--user",
+            "u1",
+            "--start",
+            "1",
+            "--resume",
+            "--force",
+        ],
+    )
+
+    assert replay_agent.main() != 0
+
+
+def test_main_returns_nonzero_for_connection_failure(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["replay_agent.py", "--user", "u1", "--start", "1"])
+
+    def fail_to_connect(*args, **kwargs):
+        raise RuntimeError("connection unavailable")
+
+    monkeypatch.setattr(replay_agent, "replay_commands", fail_to_connect)
+
+    assert replay_agent.main() != 0
+
+
+def test_main_returns_nonzero_for_database_operation_failure(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["replay_agent.py", "--user", "u1", "--start", "1"])
+
+    def fail_database_operation(*args, **kwargs):
+        raise psycopg2.DatabaseError("query failed")
+
+    monkeypatch.setattr(replay_agent, "replay_commands", fail_database_operation)
+
+    assert replay_agent.main() != 0
 
 
 def test_replay_commands_no_commands_logs_message(monkeypatch, caplog):
