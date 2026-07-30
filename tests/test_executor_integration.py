@@ -8,6 +8,8 @@ the unit tests in ``test_executor_agent.py`` stub out. They require
 
 import uuid
 
+import psycopg2
+
 from workers.executor_agent import fetch_pending, handle_command
 
 
@@ -86,3 +88,42 @@ def test_fetch_pending_returns_none_when_idle(db_conn):
         assert fetch_pending(db_conn) is None
     finally:
         db_conn.autocommit = True
+
+
+def test_queued_commands_use_sequential_per_user_environment(
+    db_conn, monkeypatch, tmp_path
+):
+    """A second worker cannot overtake cd or use its submission snapshot."""
+    child = tmp_path / "child"
+    child.mkdir()
+    monkeypatch.setenv("SHELL_ROOT", str(tmp_path))
+    user_id = _create_user_with_env(db_conn, str(tmp_path))
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT submit_command(%s, %s)", (user_id, "cd child"))
+        cd_id = cur.fetchone()[0]
+        cur.execute("SELECT submit_command(%s, %s)", (user_id, "pwd"))
+        pwd_id = cur.fetchone()[0]
+
+    worker_one = psycopg2.connect(db_conn.dsn)
+    worker_two = psycopg2.connect(db_conn.dsn)
+    try:
+        first = fetch_pending(worker_one)
+        assert first["id"] == cd_id
+
+        # This worker is eligible, but cannot claim the same user's later row.
+        assert fetch_pending(worker_two) is None
+        handle_command(worker_one, first)
+
+        second = fetch_pending(worker_two)
+        assert second["id"] == pwd_id
+        assert second["cwd_snapshot"] == str(child)
+        handle_command(worker_two, second)
+    finally:
+        worker_one.close()
+        worker_two.close()
+
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status, output FROM commands WHERE id = %s", (pwd_id,))
+        status, output = cur.fetchone()
+    assert status == "done"
+    assert output.strip() == str(child)

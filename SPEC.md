@@ -74,8 +74,13 @@ CREATE INDEX commands_user_id_id_idx ON commands (user_id, id);
 
 Execution must:
 
-- chdir to cwd_snapshot
-- set ENV from env_snapshot
+- serialize execution per user with a database-backed claim while still
+  allowing different users to execute concurrently
+- resolve the effective `cwd` and ENV from `environments` when the command is
+  claimed, after every earlier command for that user has completed, and store
+  those values in `cwd_snapshot` and `env_snapshot`
+- chdir to the resolved cwd snapshot
+- set ENV from the resolved env snapshot
 - run command via `execve()`
 - capture stdout, stderr, and exit status
 - update `commands` row and optionally modify `environments` (e.g., cd path)
@@ -123,6 +128,10 @@ Requests/responses in JSON.
 
 - `commands` table is full audit log
 - Session replay: pull all commands ≥ session start, apply in order
+- Replay uses **sequential replay state**, not the original commands'
+  historical snapshots: the first replay command starts from the user's
+  effective environment when claimed, and each later replay command observes
+  successful state changes made by earlier commands in that replay
 - Use `fork_session()` to snapshot state and replay from that point
 
 ---
