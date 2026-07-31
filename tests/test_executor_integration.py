@@ -6,11 +6,16 @@ the unit tests in ``test_executor_agent.py`` stub out. They require
 ``TEST_DATABASE_URL`` and are skipped otherwise.
 """
 
+import socket
 import uuid
 
 import psycopg2
 
-from workers.executor_agent import fetch_pending, handle_command
+from workers.executor_agent import (
+    fetch_pending,
+    handle_command,
+    recover_dead_worker_commands,
+)
 
 
 def _create_user_with_env(conn, cwd: str) -> tuple[str, str]:
@@ -128,3 +133,78 @@ def test_queued_commands_use_sequential_per_user_environment(
         status, output = cur.fetchone()
     assert status == "done"
     assert output.strip() == str(child)
+
+
+def test_expired_command_is_reclaimed_and_no_longer_blocks_session(db_conn):
+    user_id, session_id = _create_user_with_env(db_conn, "/tmp")
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT submit_command(%s, %s, %s)",
+            (user_id, session_id, "echo recovered"),
+        )
+        abandoned_id = cur.fetchone()[0]
+        cur.execute(
+            "SELECT submit_command(%s, %s, %s)",
+            (user_id, session_id, "echo next"),
+        )
+        next_id = cur.fetchone()[0]
+        cur.execute(
+            """UPDATE commands
+                  SET status = 'running', claimed_at = now() - interval '2 minutes',
+                      lease_expires_at = now() - interval '1 minute',
+                      lease_worker_id = 'departed-host:123'
+                WHERE id = %s""",
+            (abandoned_id,),
+        )
+
+    fresh_executor = psycopg2.connect(db_conn.dsn)
+    try:
+        recovered = fetch_pending(fresh_executor)
+        assert recovered["id"] == abandoned_id
+        handle_command(fresh_executor, recovered)
+
+        following = fetch_pending(fresh_executor)
+        assert following["id"] == next_id
+        handle_command(fresh_executor, following)
+    finally:
+        fresh_executor.close()
+
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """SELECT id, status, lease_worker_id, lease_expires_at
+                 FROM commands WHERE id IN (%s, %s) ORDER BY id""",
+            (abandoned_id, next_id),
+        )
+        rows = cur.fetchall()
+    assert [(row[0], row[1]) for row in rows] == [
+        (abandoned_id, "done"),
+        (next_id, "done"),
+    ]
+    assert all(row[2] is None and row[3] is None for row in rows)
+
+
+def test_startup_recovers_command_from_identifiably_dead_local_worker(db_conn):
+    user_id, session_id = _create_user_with_env(db_conn, "/tmp")
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT submit_command(%s, %s, %s)",
+            (user_id, session_id, "echo startup-recovery"),
+        )
+        cmd_id = cur.fetchone()[0]
+        cur.execute(
+            """UPDATE commands
+                  SET status = 'running', claimed_at = now(),
+                      lease_expires_at = now() + interval '1 hour',
+                      lease_worker_id = %s
+                WHERE id = %s""",
+            (f"{socket.gethostname()}:2147483647", cmd_id),
+        )
+
+    assert recover_dead_worker_commands(db_conn) == 1
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT status, claimed_at, lease_expires_at, lease_worker_id "
+            "FROM commands WHERE id = %s",
+            (cmd_id,),
+        )
+        assert cur.fetchone() == ("pending", None, None, None)

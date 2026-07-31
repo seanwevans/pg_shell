@@ -2,10 +2,32 @@ import os
 import pwd
 import shutil
 import time
+from pathlib import Path
 
 import pytest
 import workers.executor_agent
 from workers.executor_agent import run_subprocess, handle_command
+
+
+def test_schema_and_migration_define_command_leases():
+    schema = Path("sql/init_schema.sql").read_text()
+    migration = Path("sql/migrate_command_leases.sql").read_text()
+
+    for column in ("claimed_at", "lease_expires_at", "lease_worker_id"):
+        assert column in schema
+        assert f"ADD COLUMN IF NOT EXISTS {column}" in migration
+
+
+def test_run_subprocess_refreshes_lease(monkeypatch, tmp_path):
+    monkeypatch.setattr(workers.executor_agent, "LEASE_REFRESH_SECONDS", 0)
+    heartbeats = []
+
+    exit_code, _ = run_subprocess(
+        "sleep 0.2", str(tmp_path), None, heartbeat=lambda: heartbeats.append(True)
+    )
+
+    assert exit_code == 0
+    assert heartbeats
 
 
 @pytest.fixture(autouse=True)
@@ -417,6 +439,9 @@ def test_main_closes_connection_on_keyboard_interrupt(monkeypatch):
         raise KeyboardInterrupt
 
     monkeypatch.setattr('workers.executor_agent.get_conn', fake_get_conn)
+    monkeypatch.setattr(
+        'workers.executor_agent.recover_dead_worker_commands', lambda conn: 0
+    )
     monkeypatch.setattr('workers.executor_agent.setup_listener', lambda conn: None)
     monkeypatch.setattr('workers.executor_agent.fetch_pending', fake_fetch_pending)
     monkeypatch.setattr('workers.executor_agent.wait_for_notify', lambda conn, timeout: None)

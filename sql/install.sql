@@ -1,5 +1,6 @@
 -- install.sql: convenience script to install pg_shell schema and functions
 \i sql/init_schema.sql
+\i sql/migrate_command_leases.sql
 \i sql/migrate_session_identity.sql
 \i sql/migrate_replay_provenance_retention.sql
 \i sql/submit_command.sql
