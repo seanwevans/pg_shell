@@ -15,6 +15,7 @@ import pytest
 # dependency order.
 SQL_FILES = (
     "sql/init_schema.sql",
+    "sql/migrate_session_identity.sql",
     "sql/submit_command.sql",
     "sql/latest_output.sql",
     "sql/fork_session.sql",

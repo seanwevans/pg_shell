@@ -20,7 +20,9 @@ def test_tail_output_invokes_latest_output_through_postgrest(db_conn, capsys):
             "INSERT INTO users(id, username) VALUES (%s, %s)",
             (user_id, f"postgrest-{user_id}"),
         )
-        cur.execute("SELECT submit_command(%s, %s)", (user_id, "echo integration"))
+        cur.execute("INSERT INTO environments(user_id) VALUES (%s) RETURNING session_id", (user_id,))
+        session_id = str(cur.fetchone()[0])
+        cur.execute("SELECT submit_command(%s, %s, %s)", (user_id, session_id, "echo integration"))
         command_id = cur.fetchone()[0]
         cur.execute(
             """
@@ -33,7 +35,7 @@ def test_tail_output_invokes_latest_output_through_postgrest(db_conn, capsys):
         )
 
     assert tail_output(
-        base_url.rstrip("/"), user_id, since=0, interval=0, max_polls=1
+        base_url.rstrip("/"), user_id, session_id, since=0, interval=0, max_polls=1
     ) == 0
     assert capsys.readouterr().out.splitlines() == [
         "$ echo integration",

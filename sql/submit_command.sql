@@ -1,8 +1,12 @@
 -- submit_command: queues a command for execution
 -- References SPEC.md (RPC function); consumed by workers/executor_agent.py
 
+DROP FUNCTION IF EXISTS submit_command(UUID, TEXT);
+DROP FUNCTION IF EXISTS submit_command(UUID, TEXT, INT, UUID);
+
 CREATE OR REPLACE FUNCTION submit_command(
   p_user_id UUID,
+  p_session_id UUID,
   p_command TEXT,
   p_replay_of_command_id INT DEFAULT NULL,
   p_replay_run_id UUID DEFAULT NULL
@@ -21,15 +25,17 @@ BEGIN
       USING ERRCODE = '22023';
   END IF;
 
-  -- ensure environment row exists
-  SELECT * INTO env_row FROM environments WHERE user_id = p_user_id;
+  -- A session is explicit and must belong to the requesting user.
+  SELECT * INTO env_row FROM environments
+   WHERE session_id = p_session_id AND user_id = p_user_id;
   IF NOT FOUND THEN
-    INSERT INTO environments(user_id) VALUES (p_user_id)
-      RETURNING * INTO env_row;
+    RAISE EXCEPTION 'Unknown session_id or session not owned by user: %', p_session_id
+      USING ERRCODE = '22023';
   END IF;
 
   INSERT INTO commands(
     user_id,
+    session_id,
     command,
     cwd_snapshot,
     env_snapshot,
@@ -38,6 +44,7 @@ BEGIN
   )
     VALUES (
       p_user_id,
+      p_session_id,
       p_command,
       env_row.cwd,
       env_row.env,

@@ -10,7 +10,7 @@
 </head>
 <body>
 <div id="output"
-  hx-get="/rpc/latest_output?p_user_id=USER_ID"
+  hx-get="/rpc/latest_output?p_user_id=USER_ID&amp;p_session_id=SESSION_ID"
   hx-trigger="load, every 1s"
   hx-swap="none">
 </div>
@@ -24,6 +24,7 @@
   hx-encoding="json"
 >
   <input type="hidden" name="p_user_id" value="USER_ID" />
+  <input type="hidden" name="p_session_id" value="SESSION_ID" />
   <input name="p_command" autocomplete="off" autofocus placeholder="Enter command…" />
 </form>
 </body>

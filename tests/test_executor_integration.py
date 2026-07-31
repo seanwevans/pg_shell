@@ -13,7 +13,7 @@ import psycopg2
 from workers.executor_agent import fetch_pending, handle_command
 
 
-def _create_user_with_env(conn, cwd: str) -> str:
+def _create_user_with_env(conn, cwd: str) -> tuple[str, str]:
     user_id = str(uuid.uuid4())
     with conn.cursor() as cur:
         cur.execute(
@@ -21,16 +21,17 @@ def _create_user_with_env(conn, cwd: str) -> str:
             (user_id, f"exec-{user_id[:8]}"),
         )
         cur.execute(
-            "INSERT INTO environments(user_id, cwd) VALUES (%s, %s)",
+            "INSERT INTO environments(user_id, cwd) VALUES (%s, %s) RETURNING session_id",
             (user_id, cwd),
         )
-    return user_id
+        session_id = str(cur.fetchone()[0])
+    return user_id, session_id
 
 
 def test_executor_runs_pending_command_end_to_end(db_conn):
-    user_id = _create_user_with_env(db_conn, "/tmp")
+    user_id, session_id = _create_user_with_env(db_conn, "/tmp")
     with db_conn.cursor() as cur:
-        cur.execute("SELECT submit_command(%s, %s)", (user_id, "echo integration-ok"))
+        cur.execute("SELECT submit_command(%s, %s, %s)", (user_id, session_id, "echo integration-ok"))
         cmd_id = cur.fetchone()[0]
 
     # fetch_pending claims the row and flips it to 'running'.
@@ -61,9 +62,9 @@ def test_executor_cd_updates_environment(db_conn, monkeypatch, tmp_path):
     sub.mkdir()
     monkeypatch.setenv("SHELL_ROOT", str(tmp_path))
 
-    user_id = _create_user_with_env(db_conn, str(tmp_path))
+    user_id, session_id = _create_user_with_env(db_conn, str(tmp_path))
     with db_conn.cursor() as cur:
-        cur.execute("SELECT submit_command(%s, %s)", (user_id, "cd workdir"))
+        cur.execute("SELECT submit_command(%s, %s, %s)", (user_id, session_id, "cd workdir"))
         cmd_id = cur.fetchone()[0]
 
     db_conn.autocommit = False
@@ -77,7 +78,7 @@ def test_executor_cd_updates_environment(db_conn, monkeypatch, tmp_path):
     with db_conn.cursor() as cur:
         cur.execute("SELECT status FROM commands WHERE id = %s", (cmd_id,))
         assert cur.fetchone()[0] == "done"
-        cur.execute("SELECT cwd FROM environments WHERE user_id = %s", (user_id,))
+        cur.execute("SELECT cwd FROM environments WHERE session_id = %s", (session_id,))
         assert cur.fetchone()[0] == str(sub)
 
 
@@ -97,11 +98,11 @@ def test_queued_commands_use_sequential_per_user_environment(
     child = tmp_path / "child"
     child.mkdir()
     monkeypatch.setenv("SHELL_ROOT", str(tmp_path))
-    user_id = _create_user_with_env(db_conn, str(tmp_path))
+    user_id, session_id = _create_user_with_env(db_conn, str(tmp_path))
     with db_conn.cursor() as cur:
-        cur.execute("SELECT submit_command(%s, %s)", (user_id, "cd child"))
+        cur.execute("SELECT submit_command(%s, %s, %s)", (user_id, session_id, "cd child"))
         cd_id = cur.fetchone()[0]
-        cur.execute("SELECT submit_command(%s, %s)", (user_id, "pwd"))
+        cur.execute("SELECT submit_command(%s, %s, %s)", (user_id, session_id, "pwd"))
         pwd_id = cur.fetchone()[0]
 
     worker_one = psycopg2.connect(db_conn.dsn)

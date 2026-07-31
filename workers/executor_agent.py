@@ -104,7 +104,7 @@ def wait_for_notify(conn, timeout: float) -> None:
 
 
 def fetch_pending(conn) -> Dict[str, Any] | None:
-    """Claim the next command while holding a session-level per-user lock.
+    """Claim the next command while holding a session-level session lock.
 
     The advisory lock remains held after this function commits and is released
     by :func:`handle_command`.  Consequently another executor connection cannot
@@ -115,15 +115,16 @@ def fetch_pending(conn) -> Dict[str, Any] | None:
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("BEGIN;")
         cur.execute("""
-            SELECT c.id, c.user_id, c.command, e.cwd, e.env,
-                   hashtextextended(c.user_id::text, 0) AS claim_lock_key
+            SELECT c.id, c.user_id, c.session_id, c.command, e.cwd, e.env,
+                   hashtextextended(c.session_id::text, 0) AS claim_lock_key
             FROM commands AS c
-            JOIN environments AS e ON e.user_id = c.user_id
+            JOIN environments AS e
+              ON e.session_id = c.session_id AND e.user_id = c.user_id
             WHERE c.status = 'pending'
               AND NOT EXISTS (
                     SELECT 1
                     FROM commands AS earlier
-                    WHERE earlier.user_id = c.user_id
+                    WHERE earlier.session_id = c.session_id
                       AND earlier.status IN ('pending', 'running')
                       AND (earlier.submitted_at, earlier.id)
                           < (c.submitted_at, c.id)
@@ -162,11 +163,12 @@ def update_command(conn, cmd_id: int, status: str, output: str, exit_code: int) 
     conn.commit()
 
 
-def update_cwd(conn, user_id, cwd: str) -> None:
+def update_cwd(conn, user_id, session_id, cwd: str) -> None:
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE environments SET cwd=%s, updated_at=now() WHERE user_id=%s",
-            (cwd, user_id),
+            """UPDATE environments SET cwd=%s, updated_at=now()
+                 WHERE user_id=%s AND session_id=%s""",
+            (cwd, user_id, session_id),
         )
     conn.commit()
 
@@ -392,7 +394,7 @@ def _handle_command(conn, row: Dict[str, Any]) -> None:
                 path,
             )
             return
-        update_cwd(conn, row["user_id"], new_cwd)
+        update_cwd(conn, row["user_id"], row["session_id"], new_cwd)
         update_command(conn, row["id"], "done", "", 0)
         logging.info("Command %s for user %s completed", row["id"], row["user_id"])
         return

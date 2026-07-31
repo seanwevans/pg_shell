@@ -59,6 +59,14 @@ def _fetch_plan_root(cur):
     return raw["Plan"]
 
 
+def _create_session(cur, user_id):
+    cur.execute(
+        "INSERT INTO environments(user_id) VALUES (%s) RETURNING session_id",
+        (user_id,),
+    )
+    return cur.fetchone()[0]
+
+
 @pytest.fixture(scope="module")
 def conn():
     dsn = os.environ.get("TEST_DATABASE_URL")
@@ -85,9 +93,10 @@ def test_submit_and_latest_output(conn):
     user_id = str(uuid.uuid4())
     with conn.cursor() as cur:
         cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (user_id, "testuser"))
+        session_id = _create_session(cur, user_id)
         cmd_ids = []
         for idx in range(25):
-            cur.execute("SELECT submit_command(%s, %s)", (user_id, f"echo msg{idx}"))
+            cur.execute("SELECT submit_command(%s, %s, %s)", (user_id, session_id, f"echo msg{idx}"))
             cmd_id = cur.fetchone()[0]
             cur.execute(
                 "UPDATE commands SET output=%s, exit_code=0, status='done', completed_at=now() WHERE id=%s",
@@ -95,7 +104,7 @@ def test_submit_and_latest_output(conn):
             )
             cmd_ids.append(cmd_id)
 
-        cur.execute("SELECT * FROM latest_output(%s)", (user_id,))
+        cur.execute("SELECT * FROM latest_output(%s, %s)", (user_id, session_id))
         rows = cur.fetchall()
 
         assert len(rows) == 20
@@ -109,10 +118,11 @@ def test_submit_command_notifies(conn):
     user_id = str(uuid.uuid4())
     with conn.cursor() as cur:
         cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (user_id, "notify"))
+        session_id = _create_session(cur, user_id)
         cur.execute("LISTEN new_command;")
     conn.notifies.clear()
     with conn.cursor() as cur:
-        cur.execute("SELECT submit_command(%s, %s)", (user_id, "echo ping"))
+        cur.execute("SELECT submit_command(%s, %s, %s)", (user_id, session_id, "echo ping"))
         cmd_id = cur.fetchone()[0]
     notification = wait_for_notification(conn)
     with conn.cursor() as cur:
@@ -127,6 +137,7 @@ def test_submit_command_respects_configured_channel(conn):
     alt_channel = 'custom_command_channel'
     with conn.cursor() as cur:
         cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (user_id, "config"))
+        session_id = _create_session(cur, user_id)
         cur.execute(
             """
             INSERT INTO pg_shell_config(key, value)
@@ -139,7 +150,7 @@ def test_submit_command_respects_configured_channel(conn):
         cur.execute(sql.SQL("LISTEN {}").format(sql.Identifier(alt_channel)))
     conn.notifies.clear()
     with conn.cursor() as cur:
-        cur.execute("SELECT submit_command(%s, %s)", (user_id, "echo config"))
+        cur.execute("SELECT submit_command(%s, %s, %s)", (user_id, session_id, "echo config"))
         cmd_id = cur.fetchone()[0]
     notification = wait_for_notification(conn)
     with conn.cursor() as cur:
@@ -155,32 +166,58 @@ def test_submit_command_requires_existing_user(conn):
     missing_user_id = str(uuid.uuid4())
     with conn.cursor() as cur:
         with pytest.raises(psycopg2.Error) as exc_info:
-            cur.execute("SELECT submit_command(%s, %s)", (missing_user_id, "echo nope"))
+            cur.execute("SELECT submit_command(%s, %s, %s)", (missing_user_id, uuid.uuid4(), "echo nope"))
     err = exc_info.value
     assert "Unknown user_id" in str(err)
     assert err.pgcode == '22023'
 
 
-def test_fork_session_same_user_source_command_succeeds(conn):
+def test_fork_session_creates_independent_session_without_changing_source(conn):
     user_id = str(uuid.uuid4())
     with conn.cursor() as cur:
         cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (user_id, "u2"))
         cur.execute(
-            "INSERT INTO environments(user_id, cwd, env) VALUES (%s, %s, %s)",
-            (user_id, '/home/start', '{"FOO":"BAR"}'),
+            """INSERT INTO environments(user_id, cwd, env)
+                 VALUES (%s, %s, %s) RETURNING session_id""",
+            (user_id, '/home/source-current', '{"LIVE":"YES"}'),
         )
-        cur.execute("SELECT submit_command(%s, %s)", (user_id, "ls"))
+        source_session_id = cur.fetchone()[0]
+        cur.execute(
+            "SELECT submit_command(%s, %s, %s)",
+            (user_id, source_session_id, "ls"),
+        )
         cmd_id = cur.fetchone()[0]
         cur.execute(
             "UPDATE commands SET cwd_snapshot=%s, env_snapshot=%s::jsonb WHERE id=%s",
             ('/home/start', '{"FOO":"BAR"}', cmd_id),
         )
         cur.execute("SELECT fork_session(%s, %s)", (user_id, cmd_id))
-        cur.fetchone()
-        cur.execute("SELECT cwd, env FROM environments WHERE user_id=%s", (user_id,))
-        cwd, env = cur.fetchone()
-        assert cwd == '/home/start'
-        assert env == {"FOO": "BAR"}
+        fork_session_id = cur.fetchone()[0]
+        assert fork_session_id != source_session_id
+
+        cur.execute(
+            "SELECT cwd, env FROM environments WHERE session_id=%s",
+            (source_session_id,),
+        )
+        assert cur.fetchone() == ('/home/source-current', {"LIVE": "YES"})
+        cur.execute(
+            "SELECT cwd, env FROM environments WHERE session_id=%s",
+            (fork_session_id,),
+        )
+        assert cur.fetchone() == ('/home/start', {"FOO": "BAR"})
+
+        # Commands submitted to the fork use its state and do not affect the
+        # source session's command stream.
+        cur.execute(
+            "SELECT submit_command(%s, %s, %s)",
+            (user_id, fork_session_id, "pwd"),
+        )
+        fork_command_id = cur.fetchone()[0]
+        cur.execute(
+            "SELECT session_id, cwd_snapshot FROM commands WHERE id=%s",
+            (fork_command_id,),
+        )
+        assert cur.fetchone() == (fork_session_id, '/home/start')
 
 
 def test_fork_session_different_user_source_command_fails(conn):
@@ -195,7 +232,15 @@ def test_fork_session_different_user_source_command_fails(conn):
             "INSERT INTO users(id, username) VALUES (%s, %s)",
             (target_user_id, "fork-dst"),
         )
-        cur.execute("SELECT submit_command(%s, %s)", (source_user_id, "pwd"))
+        cur.execute(
+            "INSERT INTO environments(user_id) VALUES (%s) RETURNING session_id",
+            (source_user_id,),
+        )
+        source_session_id = cur.fetchone()[0]
+        cur.execute(
+            "SELECT submit_command(%s, %s, %s)",
+            (source_user_id, source_session_id, "pwd"),
+        )
         source_cmd_id = cur.fetchone()[0]
         cur.execute(
             "UPDATE commands SET cwd_snapshot=%s, env_snapshot=%s::jsonb WHERE id=%s",
@@ -210,9 +255,10 @@ def test_latest_output_since_id(conn):
     user_id = str(uuid.uuid4())
     with conn.cursor() as cur:
         cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (user_id, "u3"))
+        session_id = _create_session(cur, user_id)
         ids = []
         for idx in range(25):
-            cur.execute("SELECT submit_command(%s, %s)", (user_id, f"echo seq{idx}"))
+            cur.execute("SELECT submit_command(%s, %s, %s)", (user_id, session_id, f"echo seq{idx}"))
             cmd_id = cur.fetchone()[0]
             cur.execute(
                 "UPDATE commands SET output=%s, exit_code=0, status='done', completed_at=now() WHERE id=%s",
@@ -221,7 +267,7 @@ def test_latest_output_since_id(conn):
             ids.append(cmd_id)
 
         since_id = ids[4]
-        cur.execute("SELECT * FROM latest_output(%s, %s)", (user_id, since_id))
+        cur.execute("SELECT * FROM latest_output(%s, %s, %s)", (user_id, session_id, since_id))
         rows = cur.fetchall()
 
         expected_ids = ids[5:]
@@ -233,13 +279,14 @@ def test_replay_session_requeues_from_start(conn):
     user_id = str(uuid.uuid4())
     with conn.cursor() as cur:
         cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (user_id, "replayer"))
+        session_id = _create_session(cur, user_id)
         original_ids = []
         for idx in range(3):
-            cur.execute("SELECT submit_command(%s, %s)", (user_id, f"echo r{idx}"))
+            cur.execute("SELECT submit_command(%s, %s, %s)", (user_id, session_id, f"echo r{idx}"))
             original_ids.append(cur.fetchone()[0])
 
         start_id = original_ids[1]
-        cur.execute("SELECT replay_session(%s, %s)", (user_id, start_id))
+        cur.execute("SELECT replay_session(%s, %s, %s)", (user_id, session_id, start_id))
         run_id = cur.fetchone()[0]
         assert run_id is not None
 
@@ -266,16 +313,17 @@ def test_replay_session_only_replays_originals(conn):
     user_id = str(uuid.uuid4())
     with conn.cursor() as cur:
         cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (user_id, "replayer2"))
-        cur.execute("SELECT submit_command(%s, %s)", (user_id, "echo once"))
+        session_id = _create_session(cur, user_id)
+        cur.execute("SELECT submit_command(%s, %s, %s)", (user_id, session_id, "echo once"))
         original_id = cur.fetchone()[0]
 
         # First replay creates one replayed row.
-        cur.execute("SELECT replay_session(%s, %s)", (user_id, original_id))
+        cur.execute("SELECT replay_session(%s, %s, %s)", (user_id, session_id, original_id))
         cur.fetchone()
 
         # Second replay from the same start must re-queue only the original,
         # not the row produced by the first replay.
-        cur.execute("SELECT replay_session(%s, %s)", (user_id, original_id))
+        cur.execute("SELECT replay_session(%s, %s, %s)", (user_id, session_id, original_id))
         second_run = cur.fetchone()[0]
 
         cur.execute(
@@ -292,7 +340,7 @@ def test_replay_session_unknown_user_raises(conn):
     missing_user = str(uuid.uuid4())
     with conn.cursor() as cur:
         with pytest.raises(psycopg2.Error) as exc_info:
-            cur.execute("SELECT replay_session(%s, %s)", (missing_user, 1))
+            cur.execute("SELECT replay_session(%s, %s, %s)", (missing_user, uuid.uuid4(), 1))
     assert exc_info.value.pgcode == "22023"
 
 
@@ -302,19 +350,21 @@ def test_command_indexes_query_plans(conn):
     with conn.cursor() as cur:
         cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (primary_user, "planner"))
         cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (secondary_user, "other"))
+        primary_session = _create_session(cur, primary_user)
+        secondary_session = _create_session(cur, secondary_user)
 
         # Populate enough data to give the planner a strong preference for the new indexes
         for i in range(50):
             cur.execute(
-                "INSERT INTO commands(user_id, command, status, submitted_at)"
-                " VALUES (%s, %s, %s, now() - (%s * INTERVAL '1 minute'))",
-                (primary_user, f'cmd {i}', 'pending' if i % 3 else 'done', i),
+                "INSERT INTO commands(user_id, session_id, command, status, submitted_at)"
+                " VALUES (%s, %s, %s, %s, now() - (%s * INTERVAL '1 minute'))",
+                (primary_user, primary_session, f'cmd {i}', 'pending' if i % 3 else 'done', i),
             )
         for i in range(10):
             cur.execute(
-                "INSERT INTO commands(user_id, command, status, submitted_at)"
-                " VALUES (%s, %s, %s, now() - (%s * INTERVAL '1 minute'))",
-                (secondary_user, f'spare {i}', 'pending', i),
+                "INSERT INTO commands(user_id, session_id, command, status, submitted_at)"
+                " VALUES (%s, %s, %s, %s, now() - (%s * INTERVAL '1 minute'))",
+                (secondary_user, secondary_session, f'spare {i}', 'pending', i),
             )
 
         # Refresh planner statistics so index selection reflects the data we
@@ -332,9 +382,9 @@ def test_command_indexes_query_plans(conn):
 
         cur.execute(
             "EXPLAIN (FORMAT JSON) "
-            "SELECT id FROM commands WHERE user_id = %s ORDER BY id DESC LIMIT 1",
-            (primary_user,),
+            "SELECT id FROM commands WHERE session_id = %s ORDER BY id DESC LIMIT 1",
+            (primary_session,),
         )
         latest_plan = _fetch_plan_root(cur)
         latest_indexes = _collect_index_names(latest_plan)
-        assert "commands_user_id_id_idx" in latest_indexes
+        assert "commands_session_id_id_idx" in latest_indexes

@@ -10,6 +10,7 @@ from workers.db import get_conn
 
 def replay_commands(
     user_id: str,
+    session_id: str,
     start_id: int,
     *,
     resume: bool = False,
@@ -26,11 +27,11 @@ def replay_commands(
                 """
                 SELECT id, command
                  FROM commands
-                 WHERE user_id = %s AND id >= %s
+                 WHERE user_id = %s AND session_id = %s AND id >= %s
                    AND replay_of_command_id IS NULL
               ORDER BY id ASC
                 """,
-                (user_id, start_id),
+                (user_id, session_id, start_id),
             )
             batch_size = 100
             total = 0
@@ -51,10 +52,11 @@ def replay_commands(
                                     SELECT 1
                                       FROM commands
                                      WHERE user_id = %s
+                                       AND session_id = %s
                                        AND replay_of_command_id = %s
                                      LIMIT 1
                                     """,
-                                    (user_id, cmd_id),
+                                    (user_id, session_id, cmd_id),
                                 )
                                 if submit_cur.fetchone() is not None:
                                     logging.info(
@@ -66,8 +68,8 @@ def replay_commands(
                                 "Replaying command %s: %s", cmd_id, command
                             )
                             submit_cur.execute(
-                                "SELECT submit_command(%s, %s, %s, %s)",
-                                (user_id, command, cmd_id, replay_run_id),
+                                "SELECT submit_command(%s, %s, %s, %s, %s)",
+                                (user_id, session_id, command, cmd_id, replay_run_id),
                             )
                             new_id = submit_cur.fetchone()[0]
                             pending_commits += 1
@@ -89,6 +91,7 @@ def replay_commands(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Replay user commands")
     parser.add_argument("--user", required=True, help="User ID")
+    parser.add_argument("--session", required=True, help="Session ID")
     parser.add_argument(
         "--start", type=int, required=True, help="Starting command ID"
     )
@@ -118,6 +121,7 @@ def main() -> int:
     try:
         replay_commands(
             args.user,
+            args.session,
             args.start,
             resume=args.resume,
             force=args.force,

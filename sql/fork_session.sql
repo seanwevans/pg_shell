@@ -5,6 +5,7 @@ CREATE OR REPLACE FUNCTION fork_session(p_user_id UUID, p_source_command_id INTE
 RETURNS UUID LANGUAGE plpgsql AS $$
 DECLARE
   src RECORD;
+  new_session_id UUID := gen_random_uuid();
 BEGIN
   SELECT cwd_snapshot, env_snapshot
     INTO src
@@ -15,15 +16,11 @@ BEGIN
     RAISE EXCEPTION 'source command not found or forbidden';
   END IF;
 
-  INSERT INTO environments(user_id, cwd, env)
-    VALUES (p_user_id,
+  INSERT INTO environments(session_id, user_id, cwd, env)
+    VALUES (new_session_id, p_user_id,
             COALESCE(src.cwd_snapshot, '/home/sandbox'),
-            COALESCE(src.env_snapshot, '{}'::jsonb))
-    ON CONFLICT (user_id) DO UPDATE
-      SET cwd = EXCLUDED.cwd,
-          env = EXCLUDED.env,
-          updated_at = now();
+            COALESCE(src.env_snapshot, '{}'::jsonb));
 
-  RETURN p_user_id;
+  RETURN new_session_id;
 END;
 $$;
