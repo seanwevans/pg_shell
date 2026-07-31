@@ -134,8 +134,8 @@ def test_queued_commands_use_sequential_per_user_environment(
         cur.execute("SELECT submit_command(%s, %s, %s)", (user_id, session_id, "pwd"))
         pwd_id = cur.fetchone()[0]
 
-    worker_one = psycopg2.connect(db_conn.dsn)
-    worker_two = psycopg2.connect(db_conn.dsn)
+    worker_one = psycopg2.connect(os.environ["TEST_DATABASE_URL"])
+    worker_two = psycopg2.connect(os.environ["TEST_DATABASE_URL"])
     try:
         first = fetch_pending(worker_one)
         assert first["id"] == cd_id
@@ -180,7 +180,7 @@ def test_expired_command_is_recovered_and_no_longer_blocks_session(db_conn):
             (abandoned_id,),
         )
 
-    worker = psycopg2.connect(db_conn.dsn)
+    worker = psycopg2.connect(os.environ["TEST_DATABASE_URL"])
     try:
         recovered = fetch_pending(worker, "fresh")
         assert recovered["id"] == abandoned_id
