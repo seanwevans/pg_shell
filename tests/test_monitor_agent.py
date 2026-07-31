@@ -72,7 +72,7 @@ def test_collect_metrics_streams(monkeypatch):
     assert len(captured) == 2
     assert "u2" in captured[0]
     assert "u1" in captured[1]
-    assert "ORDER BY day, user_id" in cursor.sql
+    assert "ORDER BY day, commands.user_id" in cursor.sql
 
 
 def test_collect_metrics_uses_incremental_filter_when_state_present():
@@ -113,6 +113,39 @@ def test_collect_metrics_uses_incremental_filter_when_state_present():
 
     assert "completed_at > %s OR (completed_at = %s AND id > %s)" in cursor.sql
     assert cursor.params == [last_completed, last_completed, 42]
+    assert "WITH changed_groups" in cursor.sql
+    assert "JOIN changed_groups" in cursor.sql
+    # The watermark predicate belongs only to group discovery, while the outer
+    # query includes every terminal command in each changed daily group.
+    assert cursor.sql.count("completed_at > %s") == 1
+
+
+def test_second_poll_emits_complete_daily_aggregate():
+    """Commands arriving in later polls replace, rather than delta, a day."""
+
+    first_poll = iter([("u1", "2024-01-01", 1, 2.0)])
+    second_poll = iter([("u1", "2024-01-01", 2, 4.0)])
+
+    # This models the result of the complete-group SQL after a second command
+    # taking six seconds arrives: count=2 and weighted average=(2+6)/2=4.
+    from tempfile import TemporaryDirectory
+
+    with TemporaryDirectory() as directory:
+        path = f"{directory}/metrics.csv"
+        monitor_agent.upsert_csv_metrics(path, first_poll)
+        monitor_agent.upsert_csv_metrics(path, second_poll)
+
+        with open(path, newline="") as csv_file:
+            rows = list(csv.DictReader(csv_file))
+
+    assert rows == [
+        {
+            "user_id": "u1",
+            "day": "2024-01-01",
+            "command_count": "2",
+            "avg_seconds": "4.0",
+        }
+    ]
 
 
 def test_output_metrics_flushes_immediately(tmp_path):

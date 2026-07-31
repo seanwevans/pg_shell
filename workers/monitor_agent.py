@@ -12,6 +12,7 @@ written to a CSV file.
 import argparse
 import csv
 import logging
+import os
 import time
 from datetime import datetime, timedelta
 from typing import Callable, Iterator, Tuple
@@ -87,7 +88,12 @@ def collect_metrics(
     last_completed_at: datetime | None = None,
     last_command_id: int = 0,
 ) -> Iterator[Row]:
-    """Yield metric rows one by one using a server-side cursor."""
+    """Yield complete daily metrics for groups changed since the watermark.
+
+    The incremental predicate only identifies affected user/day groups.  The
+    outer query deliberately aggregates every terminal command in each group,
+    so a row is a materialized daily total rather than an unlabeled delta.
+    """
 
     predicates = ["status IN ('done', 'failed')", "completed_at IS NOT NULL"]
     params: list[object] = []
@@ -104,14 +110,23 @@ def collect_metrics(
     with conn.cursor(name="monitor_agent_metrics") as cur:
         cur.execute(
             f"""
-            SELECT user_id,
-                   DATE(submitted_at) AS day,
+            WITH changed_groups AS (
+                SELECT DISTINCT user_id, DATE(submitted_at) AS day
+                  FROM commands
+                 WHERE {where_sql}
+            )
+            SELECT commands.user_id,
+                   DATE(commands.submitted_at) AS day,
                    COUNT(*) AS command_count,
-                   AVG(EXTRACT(EPOCH FROM completed_at - submitted_at)) AS avg_seconds
+                   AVG(EXTRACT(EPOCH FROM commands.completed_at - commands.submitted_at)) AS avg_seconds
               FROM commands
-             WHERE {where_sql}
-          GROUP BY user_id, day
-          ORDER BY day, user_id
+              JOIN changed_groups
+                ON changed_groups.user_id = commands.user_id
+               AND changed_groups.day = DATE(commands.submitted_at)
+             WHERE commands.status IN ('done', 'failed')
+               AND commands.completed_at IS NOT NULL
+          GROUP BY commands.user_id, DATE(commands.submitted_at)
+          ORDER BY day, commands.user_id
             """,
             params,
         )
@@ -167,6 +182,40 @@ def output_metrics(
             print(f"{day} user={user_id} commands={count} avg_s={avg_seconds}")
 
 
+def upsert_csv_metrics(path: str, rows: Iterator[Row]) -> None:
+    """Upsert cumulative rows into a materialized CSV report by user and day."""
+
+    report: dict[tuple[str, str], list[object]] = {}
+    if os.path.exists(path):
+        with open(path, newline="") as csv_file:
+            for row in csv.DictReader(csv_file):
+                report[(row["user_id"], row["day"])] = [
+                    row["user_id"],
+                    row["day"],
+                    row["command_count"],
+                    row["avg_seconds"],
+                ]
+
+    for user_id, day, count, avg_seconds in rows:
+        day = str(day)
+        report[(str(user_id), day)] = [
+            user_id,
+            day,
+            count,
+            round(avg_seconds or 0.0, 3),
+        ]
+
+    temporary_path = f"{path}.tmp"
+    with open(temporary_path, "w", newline="") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["user_id", "day", "command_count", "avg_seconds"])
+        for key in sorted(report, key=lambda item: (item[1], item[0])):
+            writer.writerow(report[key])
+        csv_file.flush()
+        os.fsync(csv_file.fileno())
+    os.replace(temporary_path, path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Collect usage metrics")
     parser.add_argument(
@@ -196,10 +245,7 @@ def main() -> None:
         logging.error("%s", exc)
         return 1
 
-    def run_loop(
-        csv_writer: csv.writer | None,
-        flush: Callable[[], None] | None,
-    ) -> int:
+    def run_loop(csv_path: str | None) -> int:
         while True:
             try:
                 conn = get_conn()
@@ -213,16 +259,16 @@ def main() -> None:
             try:
                 ensure_monitor_state_table(conn)
                 last_completed_at, last_command_id = load_monitor_state(conn)
-                output_metrics(
-                    collect_metrics(
-                        conn,
-                        since_timestamp=since_timestamp,
-                        last_completed_at=last_completed_at,
-                        last_command_id=last_command_id,
-                    ),
-                    csv_writer,
-                    flush,
+                rows = collect_metrics(
+                    conn,
+                    since_timestamp=since_timestamp,
+                    last_completed_at=last_completed_at,
+                    last_command_id=last_command_id,
                 )
+                if csv_path:
+                    upsert_csv_metrics(csv_path, rows)
+                else:
+                    output_metrics(rows, None)
                 watermark = get_watermark(
                     conn,
                     since_timestamp=since_timestamp,
@@ -234,24 +280,11 @@ def main() -> None:
             finally:
                 conn.close()
 
-            if csv_writer and flush is not None:
-                flush()
-
             if args.once:
                 return 0
             time.sleep(args.interval)
 
-    if args.csv:
-
-        with open(args.csv, "a", newline="") as csv_file:
-            csv_writer = csv.writer(csv_file)
-            flush = csv_file.flush
-            if csv_file.tell() == 0:
-                csv_writer.writerow(["user_id", "day", "command_count", "avg_seconds"])
-                flush()
-            return run_loop(csv_writer, flush)
-    else:
-        return run_loop(None, None)
+    return run_loop(args.csv)
 
 
 if __name__ == "__main__":
