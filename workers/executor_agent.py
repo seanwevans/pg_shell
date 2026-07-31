@@ -15,8 +15,10 @@ import os
 import select
 import shlex
 import signal
+import socket
 import subprocess
 import time
+import uuid
 from typing import Any, Dict
 
 from psycopg2 import sql, errors
@@ -34,6 +36,16 @@ MAX_OUTPUT_BYTES = int(os.getenv("MAX_OUTPUT_BYTES", "65536"))
 TRUNCATION_SUFFIX = "...[truncated]"
 TERMINATION_GRACE_SECONDS = 0.5
 PIPE_DRAIN_TIMEOUT_SECONDS = 0.5
+LEASE_SECONDS = max(float(os.getenv("COMMAND_LEASE_SECONDS", "60")), 1.0)
+LEASE_REFRESH_SECONDS = max(
+    0.25,
+    min(
+        float(os.getenv("LEASE_REFRESH_SECONDS", str(LEASE_SECONDS / 3))),
+        LEASE_SECONDS / 2,
+    ),
+)
+WORKER_HOST = socket.gethostname()
+WORKER_ID = f"{WORKER_HOST}:{os.getpid()}:{uuid.uuid4()}"
 
 
 def _update_channel_config(conn, channel: str) -> None:
@@ -100,19 +112,28 @@ def wait_for_notify(conn, timeout: float) -> None:
 
 
 def fetch_pending(conn) -> Dict[str, Any] | None:
-    """Claim the next command while holding a session-level per-user lock.
+    """Atomically reclaim expired work and claim the next eligible command.
 
-    The advisory lock remains held after this function commits and is released
-    by :func:`handle_command`.  Consequently another executor connection cannot
-    run a command for the same user concurrently.  Snapshots are refreshed from
-    the user's effective environment at claim time, after all preceding
-    commands have reached a terminal state.
+    The earlier-command predicate preserves per-user serialization, while row
+    locks prevent concurrent executors from claiming the same command.
+    Snapshots are refreshed from the user's effective environment at claim
+    time, after all preceding commands have reached a terminal state.
     """
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("BEGIN;")
+        # Requeue abandoned work in the same transaction as the next claim.
+        # Row locks and SKIP LOCKED make this safe with concurrent executors.
+        cur.execute(
+            """
+            UPDATE commands
+               SET status = 'pending', claimed_at = NULL,
+                   lease_expires_at = NULL, worker_id = NULL
+             WHERE status = 'running'
+               AND (lease_expires_at IS NULL OR lease_expires_at < now())
+            """
+        )
         cur.execute("""
-            SELECT c.id, c.user_id, c.command, e.cwd, e.env,
-                   hashtextextended(c.user_id::text, 0) AS claim_lock_key
+            SELECT c.id, c.user_id, c.command, e.cwd, e.env
             FROM commands AS c
             JOIN environments AS e ON e.user_id = c.user_id
             WHERE c.status = 'pending'
@@ -130,17 +151,16 @@ def fetch_pending(conn) -> Dict[str, Any] | None:
             """)
         row = cur.fetchone()
         if row:
-            cur.execute("SELECT pg_try_advisory_lock(%s)", (row["claim_lock_key"],))
-            if not cur.fetchone()[0]:
-                conn.commit()
-                return None
             cur.execute(
                 """
                 UPDATE commands
-                   SET status = 'running', cwd_snapshot = %s, env_snapshot = %s
+                   SET status = 'running', cwd_snapshot = %s, env_snapshot = %s,
+                       claimed_at = now(),
+                       lease_expires_at = now() + (%s * interval '1 second'),
+                       worker_id = %s
                  WHERE id = %s
                 """,
-                (row["cwd"], row["env"], row["id"]),
+                (row["cwd"], row["env"], LEASE_SECONDS, WORKER_ID, row["id"]),
             )
             row["cwd_snapshot"] = row.pop("cwd")
             row["env_snapshot"] = row.pop("env")
@@ -152,7 +172,10 @@ def fetch_pending(conn) -> Dict[str, Any] | None:
 def update_command(conn, cmd_id: int, status: str, output: str, exit_code: int) -> None:
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE commands SET status=%s, output=%s, exit_code=%s, completed_at=now() WHERE id=%s",
+            """UPDATE commands
+                  SET status=%s, output=%s, exit_code=%s, completed_at=now(),
+                      claimed_at=NULL, lease_expires_at=NULL, worker_id=NULL
+                WHERE id=%s""",
             (status, output, exit_code, cmd_id),
         )
     conn.commit()
@@ -167,7 +190,9 @@ def update_cwd(conn, user_id, cwd: str) -> None:
     conn.commit()
 
 
-def run_subprocess(command: str, cwd: str, env_snapshot: Any) -> tuple[int, str]:
+def run_subprocess(
+    command: str, cwd: str, env_snapshot: Any, lease_refresh=None
+) -> tuple[int, str]:
     env: Dict[str, str] = os.environ.copy()
     if env_snapshot:
         if isinstance(env_snapshot, str):
@@ -192,9 +217,13 @@ def run_subprocess(command: str, cwd: str, env_snapshot: Any) -> tuple[int, str]
     termination_deadline = None
     drain_deadline = None
     fds = [proc.stdout, proc.stderr]
+    next_lease_refresh = time.monotonic() + LEASE_REFRESH_SECONDS
 
     while fds:
         now = time.monotonic()
+        if lease_refresh is not None and now >= next_lease_refresh:
+            lease_refresh()
+            next_lease_refresh = now + LEASE_REFRESH_SECONDS
         if now >= deadline and not timed_out:
             if os.name == "posix":
                 try:
@@ -262,24 +291,57 @@ def run_subprocess(command: str, cwd: str, env_snapshot: Any) -> tuple[int, str]
     return exit_code, text
 
 
-def _release_user_claim(conn, row: Dict[str, Any]) -> None:
-    lock_key = row.get("claim_lock_key")
-    if lock_key is None:
-        return
-    # A command-side database error may have left the transaction aborted;
-    # advisory unlock must still be allowed to run before this worker polls.
-    conn.rollback()
+def refresh_lease(conn, cmd_id: int) -> None:
+    """Extend a lease only while this process still owns the command."""
     with conn.cursor() as cur:
-        cur.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
+        cur.execute(
+            """
+            UPDATE commands
+               SET lease_expires_at = now() + (%s * interval '1 second')
+             WHERE id = %s AND status = 'running' AND worker_id = %s
+            """,
+            (LEASE_SECONDS, cmd_id, WORKER_ID),
+        )
     conn.commit()
 
 
+def recover_dead_workers(conn) -> int:
+    """Requeue leases owned by PIDs known to be dead on this host."""
+    prefix = f"{WORKER_HOST}:"
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT worker_id FROM commands WHERE status='running' AND worker_id LIKE %s",
+            (prefix + "%",),
+        )
+        dead = []
+        for (worker_id,) in cur.fetchall():
+            try:
+                pid = int(worker_id[len(prefix):].split(":", 1)[0])
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                dead.append(worker_id)
+            except (ValueError, PermissionError):
+                continue
+        if dead:
+            cur.execute(
+                """
+                UPDATE commands
+                   SET status='pending', claimed_at=NULL,
+                       lease_expires_at=NULL, worker_id=NULL
+                 WHERE status='running' AND worker_id = ANY(%s)
+                """,
+                (dead,),
+            )
+            recovered = cur.rowcount
+        else:
+            recovered = 0
+    conn.commit()
+    return recovered
+
+
 def handle_command(conn, row: Dict[str, Any]) -> None:
-    """Execute a claimed command and always release its per-user claim."""
-    try:
-        _handle_command(conn, row)
-    finally:
-        _release_user_claim(conn, row)
+    """Execute a claimed command."""
+    _handle_command(conn, row)
 
 
 def _handle_command(conn, row: Dict[str, Any]) -> None:
@@ -341,7 +403,10 @@ def _handle_command(conn, row: Dict[str, Any]) -> None:
 
     try:
         exit_code, output = run_subprocess(
-            command, row["cwd_snapshot"], row["env_snapshot"]
+            command,
+            row["cwd_snapshot"],
+            row["env_snapshot"],
+            lambda: refresh_lease(conn, row["id"]),
         )
     except Exception as exc:
         logging.exception(
@@ -373,6 +438,9 @@ def main() -> None:
     conn = get_conn()
     try:
         setup_listener(conn)
+        recovered = recover_dead_workers(conn)
+        if recovered:
+            logging.info("Recovered %s commands from dead workers", recovered)
         while True:
             row = fetch_pending(conn)
             if row:

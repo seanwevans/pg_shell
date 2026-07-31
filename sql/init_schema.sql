@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS commands (
   exit_code INT,
   cwd_snapshot TEXT,
   env_snapshot JSONB,
+  claimed_at TIMESTAMP,
+  lease_expires_at TIMESTAMP,
+  worker_id TEXT,
   completed_at TIMESTAMP,
   CONSTRAINT status_enum CHECK (status IN ('pending','running','done','failed'))
 );
@@ -50,6 +53,10 @@ ON CONFLICT (key) DO NOTHING;
 
 CREATE INDEX IF NOT EXISTS commands_status_submitted_at_idx
   ON commands (status, submitted_at);
+
+CREATE INDEX IF NOT EXISTS commands_running_lease_idx
+  ON commands (lease_expires_at)
+  WHERE status = 'running';
 
 CREATE INDEX IF NOT EXISTS commands_user_id_id_idx
   ON commands (user_id, id);
