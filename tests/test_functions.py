@@ -166,7 +166,7 @@ def test_submit_command_requires_existing_user(conn):
     missing_user_id = str(uuid.uuid4())
     with conn.cursor() as cur:
         with pytest.raises(psycopg2.Error) as exc_info:
-            cur.execute("SELECT submit_command(%s, %s, %s)", (missing_user_id, uuid.uuid4(), "echo nope"))
+            cur.execute("SELECT submit_command(%s, %s, %s)", (missing_user_id, str(uuid.uuid4()), "echo nope"))
     err = exc_info.value
     assert "Unknown user_id" in str(err)
     assert err.pgcode == '22023'
@@ -340,7 +340,7 @@ def test_replay_session_unknown_user_raises(conn):
     missing_user = str(uuid.uuid4())
     with conn.cursor() as cur:
         with pytest.raises(psycopg2.Error) as exc_info:
-            cur.execute("SELECT replay_session(%s, %s, %s)", (missing_user, uuid.uuid4(), 1))
+            cur.execute("SELECT replay_session(%s, %s, %s)", (missing_user, str(uuid.uuid4()), 1))
     assert exc_info.value.pgcode == "22023"
 
 

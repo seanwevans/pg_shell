@@ -6,11 +6,40 @@ the unit tests in ``test_executor_agent.py`` stub out. They require
 ``TEST_DATABASE_URL`` and are skipped otherwise.
 """
 
+import os
+import pwd
+import shutil
 import uuid
 
 import psycopg2
+import pytest
 
+import workers.executor_agent
 from workers.executor_agent import fetch_pending, handle_command, recover_worker_commands
+
+
+@pytest.fixture(autouse=True)
+def configured_executor(monkeypatch, tmp_path):
+    """Configure the executor's account and allowlist for real command runs."""
+    account = pwd.getpwuid(os.geteuid())
+    if account.pw_uid == 0:
+        account = pwd.getpwnam("nobody")
+        tmp_path.chmod(0o777)
+        parent = tmp_path.parent
+        while parent != parent.parent and parent != parent.parent.parent:
+            parent.chmod(0o755)
+            if parent == tmp_path.parents[2]:
+                break
+            parent = parent.parent
+    monkeypatch.setenv("EXECUTOR_USER", account.pw_name)
+    command_path = workers.executor_agent.DEFAULT_COMMAND_PATH
+    commands = [
+        shutil.which(name, path=command_path)
+        for name in ("echo", "pwd", "python3", "sleep")
+    ]
+    monkeypatch.setenv(
+        "EXECUTOR_ALLOWED_COMMANDS", os.pathsep.join(filter(None, commands))
+    )
 
 
 def _create_user_with_env(conn, cwd: str) -> tuple[str, str]:
