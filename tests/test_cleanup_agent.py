@@ -113,46 +113,51 @@ def test_cleanup_once_deletes_only_old_terminal_commands(conn):
         cur.execute(
             "INSERT INTO users (id, username) VALUES (%s, %s)", (uid_str, "deluser")
         )
+        cur.execute(
+            "INSERT INTO environments (user_id) VALUES (%s) RETURNING session_id",
+            (uid_str,),
+        )
+        session_id = cur.fetchone()[0]
         # Old + done -> deleted
         cur.execute(
-            "INSERT INTO commands (user_id, command, submitted_at, status) "
-            "VALUES (%s, 'old-done', now() - interval '100 days', 'done') RETURNING id",
-            (uid_str,),
+            "INSERT INTO commands (user_id, session_id, command, submitted_at, status) "
+            "VALUES (%s, %s, 'old-done', now() - interval '100 days', 'done') RETURNING id",
+            (uid_str, session_id),
         )
         old_done_id = cur.fetchone()[0]
         # Old + failed -> deleted
         cur.execute(
-            "INSERT INTO commands (user_id, command, submitted_at, status) "
-            "VALUES (%s, 'old-failed', now() - interval '100 days', 'failed') RETURNING id",
-            (uid_str,),
+            "INSERT INTO commands (user_id, session_id, command, submitted_at, status) "
+            "VALUES (%s, %s, 'old-failed', now() - interval '100 days', 'failed') RETURNING id",
+            (uid_str, session_id),
         )
         old_failed_id = cur.fetchone()[0]
         # Recent terminal commands -> preserved (still within retention window)
         cur.execute(
-            "INSERT INTO commands (user_id, command, submitted_at, status) "
-            "VALUES (%s, 'recent-done', now(), 'done') RETURNING id",
-            (uid_str,),
+            "INSERT INTO commands (user_id, session_id, command, submitted_at, status) "
+            "VALUES (%s, %s, 'recent-done', now(), 'done') RETURNING id",
+            (uid_str, session_id),
         )
         recent_done_id = cur.fetchone()[0]
         cur.execute(
-            "INSERT INTO commands (user_id, command, submitted_at, status) "
-            "VALUES (%s, 'recent-failed', now(), 'failed') RETURNING id",
-            (uid_str,),
+            "INSERT INTO commands (user_id, session_id, command, submitted_at, status) "
+            "VALUES (%s, %s, 'recent-failed', now(), 'failed') RETURNING id",
+            (uid_str, session_id),
         )
         recent_failed_id = cur.fetchone()[0]
         # Non-terminal commands are preserved regardless of age
         cur.execute(
-            "INSERT INTO commands (user_id, command, submitted_at, status) "
-            "VALUES (%s, 'old-pending', now() - interval '100 days', 'pending') "
+            "INSERT INTO commands (user_id, session_id, command, submitted_at, status) "
+            "VALUES (%s, %s, 'old-pending', now() - interval '100 days', 'pending') "
             "RETURNING id",
-            (uid_str,),
+            (uid_str, session_id),
         )
         old_pending_id = cur.fetchone()[0]
         cur.execute(
-            "INSERT INTO commands (user_id, command, submitted_at, status) "
-            "VALUES (%s, 'old-running', now() - interval '100 days', 'running') "
+            "INSERT INTO commands (user_id, session_id, command, submitted_at, status) "
+            "VALUES (%s, %s, 'old-running', now() - interval '100 days', 'running') "
             "RETURNING id",
-            (uid_str,),
+            (uid_str, session_id),
         )
         old_running_id = cur.fetchone()[0]
 
@@ -184,29 +189,31 @@ def test_cleanup_expires_original_but_retains_newer_replay(conn):
             INSERT INTO environments (user_id, cwd, env, updated_at)
             VALUES (%s, '/tmp/stale', '{"stale": true}'::jsonb,
                     now() - interval '100 days')
+            RETURNING session_id
             """,
             (uid_str,),
         )
+        session_id = cur.fetchone()[0]
         cur.execute(
             """
-            INSERT INTO commands (user_id, command, output, submitted_at, status)
-            VALUES (%s, 'original command', 'original output',
+            INSERT INTO commands (user_id, session_id, command, output, submitted_at, status)
+            VALUES (%s, %s, 'original command', 'original output',
                     now() - interval '100 days', 'done')
             RETURNING id
             """,
-            (uid_str,),
+            (uid_str, session_id),
         )
         original_id = cur.fetchone()[0]
         cur.execute(
             """
             INSERT INTO commands
-                (user_id, command, output, submitted_at, status,
+                (user_id, session_id, command, output, submitted_at, status,
                  replay_of_command_id, replay_run_id)
-            VALUES (%s, 'original command', 'replay output', now(), 'done',
+            VALUES (%s, %s, 'original command', 'replay output', now(), 'done',
                     %s, %s)
             RETURNING id
             """,
-            (uid_str, original_id, str(uuid.uuid4())),
+            (uid_str, session_id, original_id, str(uuid.uuid4())),
         )
         replay_id = cur.fetchone()[0]
 
@@ -244,12 +251,13 @@ def test_cleanup_once_resets_env(conn):
             "INSERT INTO users (id, username) VALUES (%s, %s)", (uid_str, "testuser")
         )
         cur.execute(
-            "INSERT INTO environments (user_id, cwd, env, updated_at) VALUES (%s, %s, %s::jsonb, now() - interval '100 days')",
+            "INSERT INTO environments (user_id, cwd, env, updated_at) VALUES (%s, %s, %s::jsonb, now() - interval '100 days') RETURNING session_id",
             (uid_str, "/tmp", '{"k":1}'),
         )
+        session_id = cur.fetchone()[0]
         cur.execute(
-            "INSERT INTO commands (user_id, command, submitted_at, status) VALUES (%s, 'ls', now() - interval '100 days', 'done')",
-            (uid_str,),
+            "INSERT INTO commands (user_id, session_id, command, submitted_at, status) VALUES (%s, %s, 'ls', now() - interval '100 days', 'done')",
+            (uid_str, session_id),
         )
 
     cleanup_once(conn, 90)
@@ -271,12 +279,13 @@ def test_cleanup_once_resets_multiple_envs(conn, caplog):
                 (uid, f"multiuser{i}"),
             )
             cur.execute(
-                "INSERT INTO environments (user_id, cwd, env, updated_at) VALUES (%s, %s, %s::jsonb, now() - interval '100 days')",
+                "INSERT INTO environments (user_id, cwd, env, updated_at) VALUES (%s, %s, %s::jsonb, now() - interval '100 days') RETURNING session_id",
                 (uid, "/tmp", '{"k":1}'),
             )
+            session_id = cur.fetchone()[0]
             cur.execute(
-                "INSERT INTO commands (user_id, command, submitted_at, status) VALUES (%s, 'ls', now() - interval '100 days', 'done')",
-                (uid,),
+                "INSERT INTO commands (user_id, session_id, command, submitted_at, status) VALUES (%s, %s, 'ls', now() - interval '100 days', 'done')",
+                (uid, session_id),
             )
     caplog.set_level(logging.INFO)
     cleanup_once(conn, 90)

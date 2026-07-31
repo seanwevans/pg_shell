@@ -24,7 +24,7 @@ import uuid
 from typing import Any, Callable, Dict
 
 from psycopg2 import sql, errors
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import Json, RealDictCursor
 
 from workers.db import get_conn
 
@@ -180,7 +180,7 @@ def fetch_pending(conn, worker_id: str = WORKER_ID) -> Dict[str, Any] | None:
         row = cur.fetchone()
         if row:
             cur.execute("SELECT pg_try_advisory_lock(%s)", (row["claim_lock_key"],))
-            if not cur.fetchone()[0]:
+            if not cur.fetchone()["pg_try_advisory_lock"]:
                 conn.commit()
                 return None
             cur.execute(
@@ -192,7 +192,7 @@ def fetch_pending(conn, worker_id: str = WORKER_ID) -> Dict[str, Any] | None:
                        worker_id = %s
                  WHERE id = %s
                 """,
-                (row["cwd"], row["env"], LEASE_SECONDS, worker_id, row["id"]),
+                (row["cwd"], Json(row["env"]), LEASE_SECONDS, worker_id, row["id"]),
             )
             row["cwd_snapshot"] = row.pop("cwd")
             row["env_snapshot"] = row.pop("env")
