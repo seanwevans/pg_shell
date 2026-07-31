@@ -100,6 +100,7 @@ def test_handle_command_uses_combined_output(monkeypatch):
     row = {
         'id': 42,
         'user_id': 'u1',
+        'session_id': 's1',
         'command': 'ls',
         'cwd_snapshot': '.',
         'env_snapshot': None,
@@ -115,7 +116,7 @@ def test_handle_command_uses_combined_output(monkeypatch):
 def test_handle_command_cd_relative_within_root_succeeds(tmp_path, monkeypatch):
     captured: dict = {}
 
-    def fake_update_cwd(conn, user_id, cwd):
+    def fake_update_cwd(conn, user_id, session_id, cwd):
         captured['cwd'] = cwd
 
     def fake_update_command(conn, cmd_id, status, output, exit_code):
@@ -137,6 +138,7 @@ def test_handle_command_cd_relative_within_root_succeeds(tmp_path, monkeypatch):
     row = {
         'id': 1,
         'user_id': 'u1',
+        'session_id': 's1',
         'command': 'cd sub',
         'cwd_snapshot': str(tmp_path),
         'env_snapshot': None,
@@ -173,6 +175,7 @@ def test_handle_command_cd_nonexistent_path(tmp_path, monkeypatch):
     row = {
         'id': 2,
         'user_id': 'u1',
+        'session_id': 's1',
         'command': 'cd missing',
         'cwd_snapshot': str(tmp_path),
         'env_snapshot': None,
@@ -207,6 +210,7 @@ def test_handle_command_cd_dotdot_escaping_root_fails(tmp_path, monkeypatch):
     row = {
         'id': 5,
         'user_id': 'u1',
+        'session_id': 's1',
         'command': 'cd ..',
         'cwd_snapshot': str(tmp_path),
         'env_snapshot': None,
@@ -241,6 +245,7 @@ def test_handle_command_cd_absolute_outside_root_fails(tmp_path, monkeypatch):
     row = {
         'id': 6,
         'user_id': 'u1',
+        'session_id': 's1',
         'command': 'cd /tmp',
         'cwd_snapshot': str(tmp_path),
         'env_snapshot': None,
@@ -275,6 +280,7 @@ def test_handle_command_cd_with_extra_args_runs_subprocess(monkeypatch):
     row = {
         'id': 3,
         'user_id': 'u1',
+        'session_id': 's1',
         'command': 'cd /tmp extra',
         'cwd_snapshot': '.',
         'env_snapshot': None,
@@ -308,6 +314,7 @@ def test_handle_command_malformed_command(monkeypatch):
     row = {
         'id': 4,
         'user_id': 'u1',
+        'session_id': 's1',
         'command': 'echo "unterminated',
         'cwd_snapshot': '.',
         'env_snapshot': None,
@@ -333,6 +340,7 @@ def test_handle_command_missing_binary_marks_failed(monkeypatch, tmp_path):
     row = {
         'id': 7,
         'user_id': 'u1',
+        'session_id': 's1',
         'command': 'definitely_not_a_real_binary_xyz',
         'cwd_snapshot': str(tmp_path),
         'env_snapshot': None,

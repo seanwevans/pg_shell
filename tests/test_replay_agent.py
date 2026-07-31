@@ -53,7 +53,7 @@ class FakeSubmitCursor:
         self.execute_calls.append((query, params))
         if "FROM commands" in query and "replay_of_command_id" in query:
             self._last_exists = (
-                1 if params and params[1] in self.already_replayed else None
+                1 if params and params[2] in self.already_replayed else None
             )
         else:
             self._last_exists = "submit"
@@ -108,7 +108,7 @@ class FakeConnFactory:
 
 
 def test_main_returns_zero_after_successful_replay(monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["replay_agent.py", "--user", "u1", "--start", "1"])
+    monkeypatch.setattr(sys, "argv", ["replay_agent.py", "--user", "u1", "--session", "s1", "--start", "1"])
     monkeypatch.setattr(replay_agent, "replay_commands", lambda *args, **kwargs: None)
 
     assert replay_agent.main() == 0
@@ -133,7 +133,7 @@ def test_main_returns_nonzero_for_invalid_option(monkeypatch):
 
 
 def test_main_returns_nonzero_for_connection_failure(monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["replay_agent.py", "--user", "u1", "--start", "1"])
+    monkeypatch.setattr(sys, "argv", ["replay_agent.py", "--user", "u1", "--session", "s1", "--start", "1"])
 
     def fail_to_connect(*args, **kwargs):
         raise RuntimeError("connection unavailable")
@@ -144,7 +144,7 @@ def test_main_returns_nonzero_for_connection_failure(monkeypatch):
 
 
 def test_main_returns_nonzero_for_database_operation_failure(monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["replay_agent.py", "--user", "u1", "--start", "1"])
+    monkeypatch.setattr(sys, "argv", ["replay_agent.py", "--user", "u1", "--session", "s1", "--start", "1"])
 
     def fail_database_operation(*args, **kwargs):
         raise psycopg2.DatabaseError("query failed")
@@ -161,7 +161,7 @@ def test_replay_commands_no_commands_logs_message(monkeypatch, caplog):
         replay_agent, "get_conn", FakeConnFactory(history_conn, submit_conn)
     )
     with caplog.at_level(logging.INFO):
-        replay_agent.replay_commands("u1", 1)
+        replay_agent.replay_commands("u1", "s1", 1)
     assert "no commands to replay" in caplog.text
     assert submit_conn.commit_count == 0
     assert len(history_conn.cursor_obj.fetchmany_calls) == 1
@@ -174,7 +174,7 @@ def test_replay_commands_streams_large_command_set(monkeypatch):
     monkeypatch.setattr(
         replay_agent, "get_conn", FakeConnFactory(history_conn, submit_conn)
     )
-    replay_agent.replay_commands("u1", 1)
+    replay_agent.replay_commands("u1", "s1", 1)
     assert submit_conn.commit_count == math.ceil(len(rows) / 100)
     expected_calls = math.ceil(len(rows) / 100) + 1
     assert len(history_conn.cursor_obj.fetchmany_calls) == expected_calls
@@ -187,13 +187,13 @@ def test_replay_commands_replays_full_history(monkeypatch):
     monkeypatch.setattr(
         replay_agent, "get_conn", FakeConnFactory(history_conn, submit_conn)
     )
-    replay_agent.replay_commands("u1", 1)
+    replay_agent.replay_commands("u1", "s1", 1)
     assert len(submit_conn.cursor_obj.execute_calls) == len(rows)
     submitted_commands = [params for _, params in submit_conn.cursor_obj.execute_calls]
-    assert submitted_commands[0][0:2] == ("u1", "cmd0")
-    assert submitted_commands[-1][0:2] == ("u1", "cmd149")
-    assert submitted_commands[0][2] == 0
-    assert submitted_commands[-1][2] == 149
+    assert submitted_commands[0][0:3] == ("u1", "s1", "cmd0")
+    assert submitted_commands[-1][0:3] == ("u1", "s1", "cmd149")
+    assert submitted_commands[0][3] == 0
+    assert submitted_commands[-1][3] == 149
 
 
 def test_replay_commands_resume_skips_already_replayed(monkeypatch):
@@ -204,7 +204,7 @@ def test_replay_commands_resume_skips_already_replayed(monkeypatch):
         replay_agent, "get_conn", FakeConnFactory(history_conn, submit_conn)
     )
 
-    replay_agent.replay_commands("u1", 1, resume=True)
+    replay_agent.replay_commands("u1", "s1", 1, resume=True)
 
     submit_calls = [
         call
@@ -225,7 +225,7 @@ def test_replay_commands_first_run_then_resume_enqueues_zero_new_rows(monkeypatc
         "get_conn",
         FakeConnFactory(first_history_conn, first_submit_conn),
     )
-    replay_agent.replay_commands("u1", 1, resume=True)
+    replay_agent.replay_commands("u1", "s1", 1, resume=True)
     first_submit_calls = [
         params
         for query, params in first_submit_conn.cursor_obj.execute_calls
@@ -240,7 +240,7 @@ def test_replay_commands_first_run_then_resume_enqueues_zero_new_rows(monkeypatc
         "get_conn",
         FakeConnFactory(second_history_conn, second_submit_conn),
     )
-    replay_agent.replay_commands("u1", 1, resume=True)
+    replay_agent.replay_commands("u1", "s1", 1, resume=True)
     second_submit_calls = [
         params
         for query, params in second_submit_conn.cursor_obj.execute_calls
@@ -260,7 +260,7 @@ def _mixed_history():
 
 def _submitted_source_ids(submit_conn):
     return [
-        params[2]
+        params[3]
         for query, params in submit_conn.cursor_obj.execute_calls
         if query.strip().startswith("SELECT submit_command")
     ]
@@ -273,7 +273,7 @@ def test_replay_commands_only_submits_original_commands(monkeypatch):
         replay_agent, "get_conn", FakeConnFactory(history_conn, submit_conn)
     )
 
-    replay_agent.replay_commands("u1", 1)
+    replay_agent.replay_commands("u1", "s1", 1)
 
     assert _submitted_source_ids(submit_conn) == [1, 3]
 
@@ -285,11 +285,11 @@ def test_replay_commands_resume_only_checks_and_submits_originals(monkeypatch):
         replay_agent, "get_conn", FakeConnFactory(history_conn, submit_conn)
     )
 
-    replay_agent.replay_commands("u1", 1, resume=True)
+    replay_agent.replay_commands("u1", "s1", 1, resume=True)
 
     assert _submitted_source_ids(submit_conn) == [3]
     resume_source_ids = [
-        params[1]
+        params[2]
         for query, params in submit_conn.cursor_obj.execute_calls
         if "FROM commands" in query
     ]
@@ -305,7 +305,7 @@ def test_replay_commands_force_duplicates_originals_without_replaying_generated_
         replay_agent, "get_conn", FakeConnFactory(history_conn, submit_conn)
     )
 
-    replay_agent.replay_commands("u1", 1, force=True)
+    replay_agent.replay_commands("u1", "s1", 1, force=True)
 
     assert _submitted_source_ids(submit_conn) == [1, 3]
     assert all(

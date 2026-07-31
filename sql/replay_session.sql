@@ -10,8 +10,11 @@
 -- replaying a range which already contains prior replays cannot snowball.
 -- Returns the replay_run_id grouping the newly queued commands.
 
+DROP FUNCTION IF EXISTS replay_session(UUID, INTEGER);
+
 CREATE OR REPLACE FUNCTION replay_session(
   p_user_id UUID,
+  p_session_id UUID,
   p_start_id INTEGER
 )
 RETURNS UUID LANGUAGE plpgsql AS $$
@@ -26,15 +29,23 @@ BEGIN
       USING ERRCODE = '22023';
   END IF;
 
+  PERFORM 1 FROM environments
+   WHERE session_id = p_session_id AND user_id = p_user_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Unknown session_id or session not owned by user: %', p_session_id
+      USING ERRCODE = '22023';
+  END IF;
+
   FOR rec IN
     SELECT id, command
       FROM commands
      WHERE user_id = p_user_id
+       AND session_id = p_session_id
        AND id >= p_start_id
        AND replay_of_command_id IS NULL
      ORDER BY id ASC
   LOOP
-    PERFORM submit_command(p_user_id, rec.command, rec.id, run_id);
+    PERFORM submit_command(p_user_id, p_session_id, rec.command, rec.id, run_id);
   END LOOP;
 
   RETURN run_id;

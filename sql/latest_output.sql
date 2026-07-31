@@ -3,8 +3,11 @@
 
 DROP FUNCTION IF EXISTS latest_output(UUID);
 DROP FUNCTION IF EXISTS latest_output(UUID, INTEGER);
+DROP FUNCTION IF EXISTS latest_output(UUID, UUID, INTEGER);
 
-CREATE OR REPLACE FUNCTION latest_output(p_user_id UUID, p_since_id INTEGER DEFAULT 0)
+CREATE OR REPLACE FUNCTION latest_output(
+  p_user_id UUID, p_session_id UUID, p_since_id INTEGER DEFAULT 0
+)
 RETURNS TABLE(
     id INTEGER,
     command TEXT,
@@ -23,7 +26,8 @@ BEGIN
         SELECT c.id, c.command, c.output, c.exit_code, c.status,
                c.submitted_at, c.completed_at
         FROM commands c
-        WHERE c.user_id = p_user_id AND c.id > p_since_id
+        WHERE c.user_id = p_user_id AND c.session_id = p_session_id
+          AND c.id > p_since_id
         ORDER BY c.id DESC
         LIMIT 20;
     ELSE
@@ -31,7 +35,8 @@ BEGIN
         SELECT c.id, c.command, c.output, c.exit_code, c.status,
                c.submitted_at, c.completed_at
         FROM commands c
-        WHERE c.user_id = p_user_id AND c.id > p_since_id
+        WHERE c.user_id = p_user_id AND c.session_id = p_session_id
+          AND c.id > p_since_id
         ORDER BY c.id ASC;
     END IF;
 END;

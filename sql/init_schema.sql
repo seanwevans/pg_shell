@@ -7,15 +7,18 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS environments (
-  user_id UUID PRIMARY KEY REFERENCES users(id),
+  session_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id),
   cwd TEXT NOT NULL DEFAULT '/home/sandbox',
   env JSONB NOT NULL DEFAULT '{}',
-  updated_at TIMESTAMP NOT NULL DEFAULT now()
+  updated_at TIMESTAMP NOT NULL DEFAULT now(),
+  UNIQUE (session_id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS commands (
   id SERIAL PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES users(id),
+  session_id UUID NOT NULL,
   command TEXT NOT NULL,
   -- Replay rows are retained independently of their source command. Once the
   -- source ages out, its nullable provenance link is cleared.
@@ -28,7 +31,10 @@ CREATE TABLE IF NOT EXISTS commands (
   cwd_snapshot TEXT,
   env_snapshot JSONB,
   completed_at TIMESTAMP,
-  CONSTRAINT status_enum CHECK (status IN ('pending','running','done','failed'))
+  CONSTRAINT status_enum CHECK (status IN ('pending','running','done','failed')),
+  CONSTRAINT commands_session_owner_fkey
+    FOREIGN KEY (session_id, user_id)
+    REFERENCES environments(session_id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS pg_shell_config (
@@ -51,12 +57,5 @@ ON CONFLICT (key) DO NOTHING;
 CREATE INDEX IF NOT EXISTS commands_status_submitted_at_idx
   ON commands (status, submitted_at);
 
-CREATE INDEX IF NOT EXISTS commands_user_id_id_idx
-  ON commands (user_id, id);
-
 CREATE INDEX IF NOT EXISTS commands_status_completed_at_idx
   ON commands (status, completed_at, id);
-  
-CREATE INDEX IF NOT EXISTS commands_user_replay_source_idx
-  ON commands (user_id, replay_of_command_id)
-  WHERE replay_of_command_id IS NOT NULL;

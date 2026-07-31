@@ -17,7 +17,7 @@ def test_exec_command_posts_with_prefer_headers(monkeypatch, capsys):
         assert url == "http://example/rpc/submit_command"
         # PostgREST maps JSON body keys to function argument names, so the
         # keys must match submit_command(p_user_id, p_command).
-        assert json == {"p_user_id": "u1", "p_command": "ls"}
+        assert json == {"p_user_id": "u1", "p_session_id": "s1", "p_command": "ls"}
         assert timeout == 5
         assert headers["Prefer"] == "return=representation"
         assert headers["Accept"] == "application/json"
@@ -25,7 +25,7 @@ def test_exec_command_posts_with_prefer_headers(monkeypatch, capsys):
 
     monkeypatch.setattr(sc.requests, "post", fake_post)
 
-    rc = sc.exec_command("http://example", "u1", "ls", timeout=5)
+    rc = sc.exec_command("http://example", "u1", "s1", "ls", timeout=5)
     assert rc == 0
     captured = capsys.readouterr()
     assert captured.out.strip() == "{'status': 'ok'}"
@@ -68,28 +68,28 @@ def test_replay_session_posts_prefixed_arguments(monkeypatch, capsys):
 
     def fake_post(url, json, timeout, headers):
         assert url == "http://example/rpc/replay_session"
-        assert json == {"p_user_id": "u1", "p_start_id": 5}
+        assert json == {"p_user_id": "u1", "p_session_id": "s1", "p_start_id": 5}
         return Resp()
 
     monkeypatch.setattr(sc.requests, "post", fake_post)
 
-    rc = sc.replay_session("http://example", "u1", 5)
+    rc = sc.replay_session("http://example", "u1", "s1", 5)
     assert rc == 0
 
 
 def test_main_replay_dispatches_user_and_start(monkeypatch):
     captured = {}
 
-    def fake_replay(base_url, user_id, start_id, timeout):
-        captured["args"] = (base_url, user_id, start_id)
+    def fake_replay(base_url, user_id, session_id, start_id, timeout):
+        captured["args"] = (base_url, user_id, session_id, start_id)
         return 0
 
     monkeypatch.setattr(sc, "replay_session", fake_replay)
     rc = sc.main(
-        ["--base-url", "http://example", "replay", "--user", "u1", "--start", "5"]
+        ["--base-url", "http://example", "replay", "--user", "u1", "--session", "s1", "--start", "5"]
     )
     assert rc == 0
-    assert captured["args"] == ("http://example", "u1", 5)
+    assert captured["args"] == ("http://example", "u1", "s1", 5)
 
 
 def test_exec_command_handles_empty_response(monkeypatch, capsys):
@@ -110,7 +110,7 @@ def test_exec_command_handles_empty_response(monkeypatch, capsys):
         lambda *args, **kwargs: Resp(),
     )
 
-    rc = sc.exec_command("http://example", "u1", "ls")
+    rc = sc.exec_command("http://example", "u1", "s1", "ls")
     assert rc == 0
     captured = capsys.readouterr()
     assert captured.out.strip() == "204 No Content"
@@ -131,7 +131,7 @@ def test_tail_output_stops_after_max_polls(monkeypatch):
     monkeypatch.setattr(sc.requests, 'get', fake_get)
     monkeypatch.setattr(sc.time, 'sleep', lambda _: None)
 
-    rc = sc.tail_output('http://example', 'u1', interval=0, max_polls=2)
+    rc = sc.tail_output('http://example', 'u1', 's1', interval=0, max_polls=2)
     assert rc == 0
     assert len(calls) == 2
 
@@ -151,7 +151,7 @@ def test_tail_output_prints_text_when_json_missing(monkeypatch, capsys):
     monkeypatch.setattr(sc.requests, 'get', lambda *args, **kwargs: Resp())
     monkeypatch.setattr(sc.time, 'sleep', lambda _: None)
 
-    rc = sc.tail_output('http://example', 'u1', interval=0, max_polls=1)
+    rc = sc.tail_output('http://example', 'u1', 's1', interval=0, max_polls=1)
     assert rc == 0
     captured = capsys.readouterr()
     assert captured.out.strip() == 'plain text'
@@ -198,7 +198,7 @@ def test_tail_output_waits_for_terminal_status(monkeypatch, capsys):
     monkeypatch.setattr(sc.requests, 'get', fake_get)
     monkeypatch.setattr(sc.time, 'sleep', lambda _: None)
 
-    rc = sc.tail_output('http://example', 'u1', interval=0, max_polls=3)
+    rc = sc.tail_output('http://example', 'u1', 's1', interval=0, max_polls=3)
     assert rc == 0
 
     captured = capsys.readouterr()
@@ -209,7 +209,7 @@ def test_tail_output_waits_for_terminal_status(monkeypatch, capsys):
     ]
 
     assert call_params == [
-        {'p_user_id': 'u1'},
-        {'p_user_id': 'u1'},
-        {'p_user_id': 'u1', 'p_since_id': 1},
+        {'p_user_id': 'u1', 'p_session_id': 's1'},
+        {'p_user_id': 'u1', 'p_session_id': 's1'},
+        {'p_user_id': 'u1', 'p_session_id': 's1', 'p_since_id': 1},
     ]

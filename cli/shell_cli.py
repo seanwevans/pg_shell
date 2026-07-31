@@ -48,7 +48,8 @@ DEFAULT_TIMEOUT = float(os.getenv("PG_SHELL_TIMEOUT", "30"))
 
 
 def exec_command(
-    base_url: str, user_id: str, cmd: str, timeout: float = DEFAULT_TIMEOUT
+    base_url: str, user_id: str, session_id: str, cmd: str,
+    timeout: float = DEFAULT_TIMEOUT,
 ) -> int:
     """Submit a command for execution.
 
@@ -72,7 +73,11 @@ def exec_command(
     try:
         resp = requests.post(
             f"{base_url}/rpc/submit_command",
-            json={"p_user_id": user_id, "p_command": cmd},
+            json={
+                "p_user_id": user_id,
+                "p_session_id": session_id,
+                "p_command": cmd,
+            },
             timeout=timeout,
             headers=_POST_HEADERS,
         )
@@ -124,7 +129,8 @@ def fork_session(
 
 
 def replay_session(
-    base_url: str, user_id: str, start_id: int, timeout: float = DEFAULT_TIMEOUT
+    base_url: str, user_id: str, session_id: str, start_id: int,
+    timeout: float = DEFAULT_TIMEOUT,
 ) -> int:
     """Replay a user's command history from a starting command.
 
@@ -151,7 +157,11 @@ def replay_session(
     try:
         resp = requests.post(
             f"{base_url}/rpc/replay_session",
-            json={"p_user_id": user_id, "p_start_id": start_id},
+            json={
+                "p_user_id": user_id,
+                "p_session_id": session_id,
+                "p_start_id": start_id,
+            },
             timeout=timeout,
             headers=_POST_HEADERS,
         )
@@ -167,6 +177,7 @@ def replay_session(
 def tail_output(
     base_url: str,
     user_id: str,
+    session_id: str,
     interval: float = 1.0,
     since: int | None = None,
     timeout: float = DEFAULT_TIMEOUT,
@@ -186,7 +197,7 @@ def tail_output(
     polls_remaining = max_polls
     try:
         while True:
-            params = {"p_user_id": user_id}
+            params = {"p_user_id": user_id, "p_session_id": session_id}
 
             if last_id is not None:
                 params["p_since_id"] = last_id
@@ -259,10 +270,12 @@ def main(argv: list[str] | None = None) -> int:
 
     exec_p = sub.add_parser("exec", help="Submit a command")
     exec_p.add_argument("--user", required=True, help="User ID")
+    exec_p.add_argument("--session", required=True, help="Session ID")
     exec_p.add_argument("--cmd", required=True, help="Command text")
 
     replay_p = sub.add_parser("replay", help="Replay a session from a starting command")
     replay_p.add_argument("--user", required=True, help="User ID")
+    replay_p.add_argument("--session", required=True, help="Session ID")
     replay_p.add_argument(
         "--start", type=int, required=True, help="Command ID to start replaying from"
     )
@@ -273,6 +286,7 @@ def main(argv: list[str] | None = None) -> int:
 
     tail_p = sub.add_parser("tail", help="Tail latest output")
     tail_p.add_argument("--user", required=True, help="User ID")
+    tail_p.add_argument("--session", required=True, help="Session ID")
     tail_p.add_argument("--interval", type=float, default=1.0, help="Polling interval seconds")
     tail_p.add_argument("--since", type=int, help="Start tailing after this command ID")
     tail_p.add_argument("--max-polls", type=int, help="Maximum number of polls before exiting")
@@ -280,15 +294,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "exec":
-        rc = exec_command(args.base_url, args.user, args.cmd, args.timeout)
+        rc = exec_command(args.base_url, args.user, args.session, args.cmd, args.timeout)
     elif args.command == "replay":
-        rc = replay_session(args.base_url, args.user, args.start, args.timeout)
+        rc = replay_session(
+            args.base_url, args.user, args.session, args.start, args.timeout
+        )
     elif args.command == "fork":
         rc = fork_session(args.base_url, args.user, args.at, args.timeout)
     elif args.command == "tail":
         rc = tail_output(
             args.base_url,
             args.user,
+            args.session,
             args.interval,
             args.since,
             args.timeout,
