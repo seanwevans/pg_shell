@@ -64,7 +64,17 @@ def ui_base_url():
         server.server_close()
 
 
-def test_command_and_response_markup_is_rendered_only_as_text(ui_base_url):
+def _escape_fragment(value):
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
+
+
+def test_database_fragments_are_swapped_and_untrusted_values_remain_text(ui_base_url):
     command = '<button onclick="window.commandRan=true">run me</button>'
     command_output = '<img src="missing" onerror="window.outputRan=true">'
     submission = '<svg onload="window.submissionRan=true"></svg>'
@@ -78,21 +88,29 @@ def test_command_and_response_markup_is_rendered_only_as_text(ui_base_url):
         with contextlib.closing(browser):
             page = browser.new_page()
             page.route(
-                "**/rpc/latest_output**",
+                "**/rpc/latest_output_html**",
                 lambda route: route.fulfill(
-                    json=[
-                        {
-                            "command": command,
-                            "output": command_output,
-                            "status": "done",
-                            "exit_code": 0,
-                        }
-                    ]
+                    content_type="text/html",
+                    body=(
+                        '<article class="command-result">'
+                        f'<pre class="command">{_escape_fragment(command)}</pre>'
+                        '<pre class="command-output">'
+                        f'{_escape_fragment(command_output)}</pre>'
+                        '<span class="command-status">done</span>'
+                        '<span class="exit-code">0</span></article>'
+                    ),
                 ),
             )
             page.route(
-                "**/rpc/submit_command",
-                lambda route: route.fulfill(json=submission),
+                "**/rpc/submit_command_html",
+                lambda route: route.fulfill(
+                    content_type="text/html",
+                    body=(
+                        '<article class="command-result">'
+                        f'<pre class="command">{_escape_fragment(submission)}</pre>'
+                        '<span class="command-status">pending</span></article>'
+                    ),
+                ),
             )
 
             page.goto(f"{ui_base_url}/index.html")
@@ -104,7 +122,20 @@ def test_command_and_response_markup_is_rendered_only_as_text(ui_base_url):
 
             page.locator("input[name=p_command]").fill(command)
             page.locator("form").press("Enter")
-            expect(page.locator(".submission-response")).to_have_text(submission)
+            expect(page.locator(".command")).to_have_count(2)
+            expect(page.locator(".command").last).to_have_text(submission)
 
             assert page.locator("#output svg").count() == 0
             assert page.evaluate("Boolean(window.submissionRan)") is False
+
+
+def test_ui_uses_native_htmx_swaps_without_rendering_javascript():
+    index = (HTML_DIR / "index.html").read_text()
+
+    assert "latest_output_html" in index
+    assert "submit_command_html" in index
+    assert 'hx-swap="innerHTML"' in index
+    assert 'hx-swap="beforeend"' in index
+    assert index.count('hx-headers=\'{"Accept": "text/html"}\'') == 2
+    assert "app.js" not in index
+    assert "json-enc" not in index

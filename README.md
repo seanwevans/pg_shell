@@ -122,12 +122,13 @@ cd html && python3 -m http.server 8080
 When running PostgREST you can also point `server-static-path` to this
 folder so the UI is served alongside your RPC endpoints.
 
-Poll a user's output by passing the RPC arguments directly. PostgREST casts
-the plain UUID and integer values to the `latest_output(UUID, INTEGER)`
-function parameters:
+The browser calls the `latest_output_html` and `submit_command_html` RPCs,
+which return a PostgreSQL `"text/html"` domain. PostgREST serves that media
+type directly, so htmx swaps server-rendered, HTML-escaped fragments without
+client-side JSON parsing or DOM construction. Poll a user's output with:
 
 ```bash
-curl "http://localhost:3000/rpc/latest_output?p_user_id=00000000-0000-0000-0000-000000000000&p_since_id=0"
+curl -H 'Accept: text/html' "http://localhost:3000/rpc/latest_output_html?p_user_id=00000000-0000-0000-0000-000000000000&p_session_id=00000000-0000-0000-0000-000000000000&p_since_id=0"
 ```
 
 ## Running Tests

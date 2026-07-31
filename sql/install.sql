@@ -5,6 +5,7 @@
 \i sql/migrate_command_leases.sql
 \i sql/submit_command.sql
 \i sql/latest_output.sql -- updated latest_output with optional since_id filter
+\i sql/html_fragments.sql
 \i sql/fork_session.sql
 \i sql/replay_session.sql
 

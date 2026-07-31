@@ -5,23 +5,21 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'" />
   <title>pg_shell</title>
   <script defer src="vendor/htmx-1.9.12.min.js"></script>
-  <script defer src="vendor/json-enc-1.9.12.js"></script>
-  <script defer src="app.js"></script>
 </head>
 <body>
 <div id="output"
-  hx-get="/rpc/latest_output?p_user_id=USER_ID&amp;p_session_id=SESSION_ID"
+  hx-get="/rpc/latest_output_html?p_user_id=USER_ID&amp;p_session_id=SESSION_ID"
   hx-trigger="load, every 1s"
-  hx-swap="none">
+  hx-headers='{"Accept": "text/html"}'
+  hx-swap="innerHTML">
 </div>
 
 <form
-  hx-post="/rpc/submit_command"
+  hx-post="/rpc/submit_command_html"
   hx-trigger="submit from:form"
   hx-target="#output"
-  hx-swap="none"
-  hx-ext="json-enc"
-  hx-encoding="json"
+  hx-headers='{"Accept": "text/html"}'
+  hx-swap="beforeend"
 >
   <input type="hidden" name="p_user_id" value="USER_ID" />
   <input type="hidden" name="p_session_id" value="SESSION_ID" />
