@@ -2,7 +2,9 @@
 
 import contextlib
 import functools
+import glob
 import http.server
+import os
 import threading
 from pathlib import Path
 
@@ -17,6 +19,32 @@ sync_playwright = playwright_sync_api.sync_playwright
 
 
 HTML_DIR = Path(__file__).parents[1] / "html"
+
+
+def _launch_chromium(playwright):
+    """Launch Chromium, tolerating a browser build that predates this
+    Playwright release's pinned revision.
+
+    ``playwright.chromium.launch()`` resolves an exact browser build number and
+    fails when only a differently numbered Chromium is present in the image (a
+    common situation when the browser is provisioned separately from the pinned
+    Python package). Fall back to any executable Chromium found under
+    ``PLAYWRIGHT_BROWSERS_PATH`` before giving up.
+    """
+    try:
+        return playwright.chromium.launch()
+    except Exception:
+        root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/opt/pw-browsers")
+        patterns = (
+            "chromium-*/chrome-linux/chrome",
+            "chromium_headless_shell-*/chrome-linux/headless_shell",
+            "chromium",
+        )
+        for pattern in patterns:
+            for path in sorted(glob.glob(os.path.join(root, pattern))):
+                if os.access(path, os.X_OK):
+                    return playwright.chromium.launch(executable_path=path)
+        raise
 
 
 @pytest.fixture(scope="module")
@@ -43,7 +71,7 @@ def test_command_and_response_markup_is_rendered_only_as_text(ui_base_url):
 
     with sync_playwright() as playwright:
         try:
-            browser = playwright.chromium.launch()
+            browser = _launch_chromium(playwright)
         except Exception as error:
             pytest.skip(f"Playwright Chromium is unavailable: {error}")
 
