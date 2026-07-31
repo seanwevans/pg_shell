@@ -57,6 +57,13 @@ DATABASE_URL=postgresql://localhost/postgres python workers/executor_agent.py
 The executor agent will exit with an error if neither `DATABASE_URL` nor
 `PG_CONN` is set.
 Set `COMMAND_TIMEOUT` (seconds) to limit how long each command may run.
+Executors claim work with renewable leases. `COMMAND_LEASE_SECONDS` controls
+the lease lifetime (60 seconds by default), and
+`COMMAND_LEASE_REFRESH_SECONDS` controls the heartbeat interval. Set a stable,
+unique `EXECUTOR_WORKER_ID` for a singleton worker deployment to let its next
+instance immediately recover commands left by the previous instance at
+startup; otherwise a process-unique identifier is generated and abandoned
+work is recovered when its lease expires.
 Commands are parsed with `shlex.split` before execution, so quoting rules follow
 POSIX shells but features like glob expansion are not performed.
 

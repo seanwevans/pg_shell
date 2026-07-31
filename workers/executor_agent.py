@@ -17,9 +17,11 @@ import select
 import shlex
 import shutil
 import signal
+import socket
 import subprocess
 import time
-from typing import Any, Dict
+import uuid
+from typing import Any, Callable, Dict
 
 from psycopg2 import sql, errors
 from psycopg2.extras import RealDictCursor
@@ -38,6 +40,13 @@ TERMINATION_GRACE_SECONDS = 0.5
 PIPE_DRAIN_TIMEOUT_SECONDS = 0.5
 RESERVED_COMMAND_ENV = frozenset({"DATABASE_URL", "PG_CONN"})
 DEFAULT_COMMAND_PATH = "/usr/local/bin:/usr/bin:/bin"
+LEASE_SECONDS = float(os.getenv("COMMAND_LEASE_SECONDS", "60"))
+LEASE_REFRESH_SECONDS = float(
+    os.getenv("COMMAND_LEASE_REFRESH_SECONDS", str(max(1.0, LEASE_SECONDS / 3)))
+)
+WORKER_ID = os.getenv("EXECUTOR_WORKER_ID") or (
+    f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4()}"
+)
 
 
 def _update_channel_config(conn, channel: str) -> None:
@@ -103,7 +112,31 @@ def wait_for_notify(conn, timeout: float) -> None:
         conn.notifies.clear()
 
 
-def fetch_pending(conn) -> Dict[str, Any] | None:
+def recover_worker_commands(conn, worker_id: str = WORKER_ID) -> int:
+    """Release commands belonging to a previous instance of this worker.
+
+    ``EXECUTOR_WORKER_ID`` should be a stable, unique deployment identity. At
+    startup, a new instance with that identity makes work left by its dead
+    predecessor eligible immediately rather than waiting for lease expiry.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE commands
+               SET status = 'pending', claimed_at = NULL,
+                   lease_expires_at = NULL, worker_id = NULL
+             WHERE status = 'running' AND worker_id = %s
+            """,
+            (worker_id,),
+        )
+        recovered = cur.rowcount
+    conn.commit()
+    if recovered:
+        logging.warning("Recovered %s command(s) left by worker %s", recovered, worker_id)
+    return recovered
+
+
+def fetch_pending(conn, worker_id: str = WORKER_ID) -> Dict[str, Any] | None:
     """Claim the next command while holding a session-level session lock.
 
     The advisory lock remains held after this function commits and is released
@@ -114,6 +147,17 @@ def fetch_pending(conn) -> Dict[str, Any] | None:
     """
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("BEGIN;")
+        # Requeue abandoned work first so it no longer blocks later commands
+        # in the same session. NULL leases are rows created by older workers.
+        cur.execute(
+            """
+            UPDATE commands
+               SET status = 'pending', claimed_at = NULL,
+                   lease_expires_at = NULL, worker_id = NULL
+             WHERE status = 'running'
+               AND (lease_expires_at IS NULL OR lease_expires_at <= now())
+            """
+        )
         cur.execute("""
             SELECT c.id, c.user_id, c.session_id, c.command, e.cwd, e.env,
                    hashtextextended(c.session_id::text, 0) AS claim_lock_key
@@ -142,10 +186,13 @@ def fetch_pending(conn) -> Dict[str, Any] | None:
             cur.execute(
                 """
                 UPDATE commands
-                   SET status = 'running', cwd_snapshot = %s, env_snapshot = %s
+                   SET status = 'running', cwd_snapshot = %s, env_snapshot = %s,
+                       claimed_at = now(),
+                       lease_expires_at = now() + %s * interval '1 second',
+                       worker_id = %s
                  WHERE id = %s
                 """,
-                (row["cwd"], row["env"], row["id"]),
+                (row["cwd"], row["env"], LEASE_SECONDS, worker_id, row["id"]),
             )
             row["cwd_snapshot"] = row.pop("cwd")
             row["env_snapshot"] = row.pop("env")
@@ -157,7 +204,10 @@ def fetch_pending(conn) -> Dict[str, Any] | None:
 def update_command(conn, cmd_id: int, status: str, output: str, exit_code: int) -> None:
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE commands SET status=%s, output=%s, exit_code=%s, completed_at=now() WHERE id=%s",
+            """UPDATE commands
+                  SET status=%s, output=%s, exit_code=%s, completed_at=now(),
+                      claimed_at=NULL, lease_expires_at=NULL, worker_id=NULL
+                WHERE id=%s""",
             (status, output, exit_code, cmd_id),
         )
     conn.commit()
@@ -173,7 +223,26 @@ def update_cwd(conn, user_id, session_id, cwd: str) -> None:
     conn.commit()
 
 
-def run_subprocess(command: str, cwd: str, env_snapshot: Any) -> tuple[int, str]:
+def refresh_lease(conn, cmd_id: int, worker_id: str = WORKER_ID) -> bool:
+    """Extend a command lease, returning false if this worker lost ownership."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """UPDATE commands
+                  SET lease_expires_at = now() + %s * interval '1 second'
+                WHERE id = %s AND status = 'running' AND worker_id = %s""",
+            (LEASE_SECONDS, cmd_id, worker_id),
+        )
+        refreshed = cur.rowcount == 1
+    conn.commit()
+    return refreshed
+
+
+def run_subprocess(
+    command: str,
+    cwd: str,
+    env_snapshot: Any,
+    lease_refresh: Callable[[], bool] | None = None,
+) -> tuple[int, str]:
     # Never inherit the worker's environment: it contains the database DSN and
     # may contain unrelated orchestration credentials.
     env: Dict[str, str] = {
@@ -252,9 +321,14 @@ def run_subprocess(command: str, cwd: str, env_snapshot: Any) -> tuple[int, str]
     termination_deadline = None
     drain_deadline = None
     fds = [proc.stdout, proc.stderr]
+    next_lease_refresh = time.monotonic() + LEASE_REFRESH_SECONDS
 
     while fds:
         now = time.monotonic()
+        if lease_refresh is not None and now >= next_lease_refresh:
+            if not lease_refresh():
+                logging.error("Command lease was lost while subprocess was active")
+            next_lease_refresh = now + LEASE_REFRESH_SECONDS
         if now >= deadline and not timed_out:
             if os.name == "posix":
                 try:
@@ -401,7 +475,10 @@ def _handle_command(conn, row: Dict[str, Any]) -> None:
 
     try:
         exit_code, output = run_subprocess(
-            command, row["cwd_snapshot"], row["env_snapshot"]
+            command,
+            row["cwd_snapshot"],
+            row["env_snapshot"],
+            lambda: refresh_lease(conn, row["id"]),
         )
     except Exception as exc:
         logging.exception(
@@ -433,6 +510,7 @@ def main() -> None:
     conn = get_conn()
     try:
         setup_listener(conn)
+        recover_worker_commands(conn)
         while True:
             row = fetch_pending(conn)
             if row:

@@ -134,7 +134,7 @@ def test_run_subprocess_rejects_reserved_snapshot_variables(
 def test_handle_command_uses_combined_output(monkeypatch):
     captured = {}
 
-    def fake_run_subprocess(command, cwd, env):
+    def fake_run_subprocess(command, cwd, env, lease_refresh=None):
         return 1, "stdout+stderr"
 
     def fake_update_command(conn, cmd_id, status, output, exit_code):
@@ -310,7 +310,7 @@ def test_handle_command_cd_absolute_outside_root_fails(tmp_path, monkeypatch):
 def test_handle_command_cd_with_extra_args_runs_subprocess(monkeypatch):
     captured: dict = {}
 
-    def fake_run_subprocess(command, cwd, env):
+    def fake_run_subprocess(command, cwd, env, lease_refresh=None):
         captured['command'] = command
         return 0, ''
 
@@ -418,6 +418,7 @@ def test_main_closes_connection_on_keyboard_interrupt(monkeypatch):
 
     monkeypatch.setattr('workers.executor_agent.get_conn', fake_get_conn)
     monkeypatch.setattr('workers.executor_agent.setup_listener', lambda conn: None)
+    monkeypatch.setattr('workers.executor_agent.recover_worker_commands', lambda conn: 0)
     monkeypatch.setattr('workers.executor_agent.fetch_pending', fake_fetch_pending)
     monkeypatch.setattr('workers.executor_agent.wait_for_notify', lambda conn, timeout: None)
 
@@ -425,3 +426,24 @@ def test_main_closes_connection_on_keyboard_interrupt(monkeypatch):
         workers.executor_agent.main()
 
     assert closed
+
+
+def test_run_subprocess_refreshes_lease(monkeypatch, tmp_path):
+    monkeypatch.setattr(workers.executor_agent, "LEASE_REFRESH_SECONDS", 0.01)
+    refreshes = []
+
+    exit_code, _ = run_subprocess(
+        "sleep 0.1", str(tmp_path), None, lambda: refreshes.append(True) or True
+    )
+
+    assert exit_code == 0
+    assert refreshes
+
+
+def test_schema_and_migration_define_idempotent_lease_metadata():
+    init_schema = open("sql/init_schema.sql").read()
+    migration = open("sql/migrate_command_leases.sql").read()
+
+    for column in ("claimed_at", "lease_expires_at", "worker_id"):
+        assert column in init_schema
+        assert f"ADD COLUMN IF NOT EXISTS {column}" in migration
