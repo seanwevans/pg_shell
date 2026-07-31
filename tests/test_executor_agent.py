@@ -440,6 +440,25 @@ def test_run_subprocess_refreshes_lease(monkeypatch, tmp_path):
     assert refreshes
 
 
+def test_run_subprocess_refreshes_lease_after_output_pipes_close(
+    monkeypatch, tmp_path
+):
+    """A quiet process must retain its lease until the process itself exits."""
+    monkeypatch.setattr(workers.executor_agent, "LEASE_REFRESH_SECONDS", 0.01)
+    refreshes = []
+    command = (
+        "python3 -c 'import os,time; os.close(1); os.close(2); time.sleep(0.2)'"
+    )
+
+    exit_code, output = run_subprocess(
+        command, str(tmp_path), None, lambda: refreshes.append(True) or True
+    )
+
+    assert exit_code == 0
+    assert output == ""
+    assert refreshes
+
+
 def test_schema_and_migration_define_idempotent_lease_metadata():
     init_schema = open("sql/init_schema.sql").read()
     migration = open("sql/migrate_command_leases.sql").read()

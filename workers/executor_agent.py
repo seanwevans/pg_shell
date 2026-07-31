@@ -323,7 +323,10 @@ def run_subprocess(
     fds = [proc.stdout, proc.stderr]
     next_lease_refresh = time.monotonic() + LEASE_REFRESH_SECONDS
 
-    while fds:
+    # A process can close both output streams and continue doing work. Keep
+    # driving its timeout and lease heartbeat until it actually exits rather
+    # than blocking in ``wait()`` with an unrefreshed lease.
+    while fds or proc.poll() is None:
         now = time.monotonic()
         if lease_refresh is not None and now >= next_lease_refresh:
             if not lease_refresh():
@@ -360,7 +363,11 @@ def run_subprocess(
         if drain_deadline is not None:
             next_event = drain_deadline
         select_timeout = max(0.0, min(0.1, next_event - now))
-        ready, _, _ = select.select(fds, [], [], select_timeout)
+        if fds:
+            ready, _, _ = select.select(fds, [], [], select_timeout)
+        else:
+            time.sleep(select_timeout)
+            ready = []
         for fd in ready:
             chunk = fd.read1(4096)
             if not chunk:
