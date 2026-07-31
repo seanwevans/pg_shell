@@ -275,6 +275,40 @@ def test_latest_output_since_id(conn):
         assert [row[0] for row in rows] == expected_ids
 
 
+def test_html_rpcs_render_escaped_fragments(conn):
+    user_id = str(uuid.uuid4())
+    command = '<button title="quoted">run & go</button>'
+    output = "<img src=x onerror='bad'>"
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO users(id, username) VALUES (%s, %s)",
+            (user_id, "html-renderer"),
+        )
+        session_id = _create_session(cur, user_id)
+        cur.execute(
+            "SELECT submit_command_html(%s, %s, %s)",
+            (user_id, session_id, command),
+        )
+        submitted = cur.fetchone()[0]
+        cur.execute(
+            "UPDATE commands SET output=%s, exit_code=0, status='done' "
+            "WHERE user_id=%s AND session_id=%s",
+            (output, user_id, session_id),
+        )
+        cur.execute(
+            "SELECT latest_output_html(%s, %s)",
+            (user_id, session_id),
+        )
+        latest = cur.fetchone()[0]
+
+    assert '&lt;button title=&quot;quoted&quot;&gt;run &amp; go&lt;/button&gt;' in submitted
+    assert '<button' not in submitted
+    assert "command-status\">pending" in submitted
+    assert "&lt;img src=x onerror=&#39;bad&#39;&gt;" in latest
+    assert "command-status\">done" in latest
+    assert "exit-code\">0" in latest
+
+
 def test_replay_session_requeues_from_start(conn):
     user_id = str(uuid.uuid4())
     with conn.cursor() as cur:
