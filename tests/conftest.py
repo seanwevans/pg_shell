@@ -16,6 +16,7 @@ import pytest
 SQL_FILES = (
     "sql/init_schema.sql",
     "sql/migrate_session_identity.sql",
+    "sql/migrate_command_leases.sql",
     "sql/submit_command.sql",
     "sql/latest_output.sql",
     "sql/fork_session.sql",
