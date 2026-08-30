@@ -223,3 +223,9 @@ def test_ensure_monitor_state_table_persists_without_a_watermark(db_conn):
     with db_conn.cursor() as cur:
         cur.execute("SELECT to_regclass('monitor_state') IS NOT NULL")
         assert cur.fetchone()[0] is True
+
+
+def test_module_exposes_its_docstring():
+    """A __future__ import above the docstring demotes it to a dead literal."""
+    assert monitor_agent.__doc__ is not None
+    assert "pg_shell monitor agent" in monitor_agent.__doc__

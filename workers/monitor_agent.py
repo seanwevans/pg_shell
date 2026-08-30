@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """pg_shell monitor agent.
 
 Collects usage statistics from the ``commands`` table. Metrics include
@@ -8,6 +6,8 @@ command counts per user per day and the approximate time between
 submission and completion. Results are printed to stdout or optionally
 written to a CSV file.
 """
+
+from __future__ import annotations
 
 import argparse
 import csv
@@ -224,7 +224,7 @@ def upsert_csv_metrics(path: str, rows: Iterator[Row]) -> None:
     os.replace(temporary_path, path)
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description="Collect usage metrics")
     parser.add_argument(
         "--interval",
