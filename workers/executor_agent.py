@@ -59,6 +59,9 @@ RESERVED_COMMAND_ENV = frozenset(
 # ``BASH_FUNC_*`` smuggles exported shell functions into any allowlisted shell.
 RESERVED_COMMAND_ENV_PREFIXES = ("LD_", "DYLD_", "BASH_FUNC_")
 DEFAULT_COMMAND_PATH = "/usr/local/bin:/usr/bin:/bin"
+# How many sessions a single poll may try before giving up. One session
+# whose claim lock is held elsewhere must not hide every other session.
+CLAIM_CANDIDATES = int(os.getenv("COMMAND_CLAIM_CANDIDATES", "10"))
 LEASE_SECONDS = float(os.getenv("COMMAND_LEASE_SECONDS", "60"))
 LEASE_REFRESH_SECONDS = float(
     os.getenv("COMMAND_LEASE_REFRESH_SECONDS", str(max(1.0, LEASE_SECONDS / 3)))
@@ -164,6 +167,11 @@ def fetch_pending(conn, worker_id: str = WORKER_ID) -> Dict[str, Any] | None:
     the user's effective environment at claim time, after all preceding
     commands have reached a terminal state.
 
+    Up to ``CLAIM_CANDIDATES`` sessions are considered per poll and the first
+    one whose claim lock is free is taken.  Sessions are independent, so a
+    session locked by another worker must be stepped over rather than ending
+    the poll -- otherwise it would hide every session behind it.
+
     ``conn`` must not be in autocommit mode: the requeue, the claim and the
     row lock all have to land in one transaction, which psycopg2 opens
     implicitly on the first statement below and this function commits.
@@ -197,14 +205,19 @@ def fetch_pending(conn, worker_id: str = WORKER_ID) -> Dict[str, Any] | None:
               )
             ORDER BY c.submitted_at, c.id
             FOR UPDATE SKIP LOCKED
-            LIMIT 1
-            """)
-        row = cur.fetchone()
+            LIMIT %s
+            """, (CLAIM_CANDIDATES,))
+        # The NOT EXISTS above admits at most one command per session, so
+        # these candidates are distinct sessions in submission order.
+        row = None
+        for candidate in cur.fetchall():
+            cur.execute(
+                "SELECT pg_try_advisory_lock(%s)", (candidate["claim_lock_key"],)
+            )
+            if cur.fetchone()["pg_try_advisory_lock"]:
+                row = candidate
+                break
         if row:
-            cur.execute("SELECT pg_try_advisory_lock(%s)", (row["claim_lock_key"],))
-            if not cur.fetchone()["pg_try_advisory_lock"]:
-                conn.commit()
-                return None
             cur.execute(
                 """
                 UPDATE commands

@@ -117,6 +117,65 @@ def test_executor_cd_updates_environment(db_conn, monkeypatch, tmp_path):
         assert cur.fetchone()[0] == str(sub)
 
 
+def test_fetch_pending_skips_a_session_whose_claim_lock_is_held(db_conn):
+    """A busy session must not hide every session queued behind it.
+
+    SPEC.md section 3 requires per-user serialization "while still allowing
+    different users to execute concurrently". fetch_pending used to look at a
+    single candidate row and return None when its advisory lock was taken, so
+    one session whose lock was held by a peer worker (for instance after its
+    lease expired but before it finished) starved every other session for as
+    long as that worker held the lock.
+    """
+    busy_user, busy_session = _create_user_with_env(db_conn, "/tmp")
+    free_user, free_session = _create_user_with_env(db_conn, "/tmp")
+
+    with db_conn.cursor() as cur:
+        # The blocked session's command is submitted first, so it sorts ahead.
+        cur.execute(
+            "SELECT submit_command(%s, %s, %s)", (busy_user, busy_session, "echo busy")
+        )
+        busy_id = cur.fetchone()[0]
+        cur.execute(
+            "SELECT submit_command(%s, %s, %s)", (free_user, free_session, "echo free")
+        )
+        free_id = cur.fetchone()[0]
+        cur.execute("SELECT hashtextextended(%s, 0)", (busy_session,))
+        busy_lock_key = cur.fetchone()[0]
+
+    # A peer worker on its own connection holds the busy session's claim lock.
+    peer = psycopg2.connect(os.environ["TEST_DATABASE_URL"])
+    peer.autocommit = True
+    try:
+        with peer.cursor() as cur:
+            cur.execute("SELECT pg_advisory_lock(%s)", (busy_lock_key,))
+
+        db_conn.autocommit = False
+        row = None
+        try:
+            row = fetch_pending(db_conn)
+            assert row is not None, "poll gave up instead of trying the next session"
+            assert row["id"] == free_id
+            assert str(row["session_id"]) == free_session
+        finally:
+            if row is not None:
+                _release_user_claim(db_conn, row)
+            db_conn.autocommit = True
+    finally:
+        peer.close()
+
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, status FROM commands WHERE id IN (%s, %s) ORDER BY id",
+            (busy_id, free_id),
+        )
+        statuses = dict(cur.fetchall())
+
+    # The blocked session is left untouched for the worker that owns it.
+    assert statuses[busy_id] == "pending"
+    assert statuses[free_id] == "running"
+
+
 def test_fetch_pending_claims_atomically_without_server_warnings(db_conn):
     """The claim is one transaction, and it does not warn on every poll.
 

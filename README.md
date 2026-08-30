@@ -63,7 +63,9 @@ the lease lifetime (60 seconds by default), and
 unique `EXECUTOR_WORKER_ID` for a singleton worker deployment to let its next
 instance immediately recover commands left by the previous instance at
 startup; otherwise a process-unique identifier is generated and abandoned
-work is recovered when its lease expires.
+work is recovered when its lease expires. Each poll considers up to
+`COMMAND_CLAIM_CANDIDATES` sessions (10 by default) and takes the first whose
+per-session claim is free, so one busy session does not delay the others.
 Commands are parsed with `shlex.split` before execution, so quoting rules follow
 POSIX shells but features like glob expansion are not performed.
 
