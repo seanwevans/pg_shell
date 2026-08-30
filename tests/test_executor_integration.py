@@ -12,10 +12,16 @@ import shutil
 import uuid
 
 import psycopg2
+import psycopg2.extensions
 import pytest
 
 import workers.executor_agent
-from workers.executor_agent import fetch_pending, handle_command, recover_worker_commands
+from workers.executor_agent import (
+    _release_user_claim,
+    fetch_pending,
+    handle_command,
+    recover_worker_commands,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -109,6 +115,46 @@ def test_executor_cd_updates_environment(db_conn, monkeypatch, tmp_path):
         assert cur.fetchone()[0] == "done"
         cur.execute("SELECT cwd FROM environments WHERE session_id = %s", (session_id,))
         assert cur.fetchone()[0] == str(sub)
+
+
+def test_fetch_pending_claims_atomically_without_server_warnings(db_conn):
+    """The claim is one transaction, and it does not warn on every poll.
+
+    fetch_pending used to open its transaction with an explicit ``BEGIN``,
+    which psycopg2 had already issued implicitly. PostgreSQL answered every
+    single poll with ``WARNING: there is already a transaction in progress``,
+    so a worker polling once a second wrote 86,400 warnings a day into the
+    server log.
+    """
+    user_id, session_id = _create_user_with_env(db_conn, "/tmp")
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT submit_command(%s, %s, %s)", (user_id, session_id, "echo warn")
+        )
+        cmd_id = cur.fetchone()[0]
+
+    db_conn.autocommit = False
+    del db_conn.notices[:]
+    try:
+        row = fetch_pending(db_conn)
+        assert row is not None and row["id"] == cmd_id
+        # Still a single transaction: the claim is not visible until commit,
+        # and fetch_pending commits before returning.
+        assert db_conn.get_transaction_status() == (
+            psycopg2.extensions.TRANSACTION_STATUS_IDLE
+        )
+        notices = list(db_conn.notices)
+    finally:
+        _release_user_claim(db_conn, row)
+        db_conn.autocommit = True
+
+    assert not [n for n in notices if "already a transaction in progress" in n], notices
+
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status, worker_id FROM commands WHERE id = %s", (cmd_id,))
+        status, worker_id = cur.fetchone()
+    assert status == "running"
+    assert worker_id is not None
 
 
 def test_fetch_pending_returns_none_when_idle(db_conn):

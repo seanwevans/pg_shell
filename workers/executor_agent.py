@@ -163,9 +163,12 @@ def fetch_pending(conn, worker_id: str = WORKER_ID) -> Dict[str, Any] | None:
     run a command for the same user concurrently.  Snapshots are refreshed from
     the user's effective environment at claim time, after all preceding
     commands have reached a terminal state.
+
+    ``conn`` must not be in autocommit mode: the requeue, the claim and the
+    row lock all have to land in one transaction, which psycopg2 opens
+    implicitly on the first statement below and this function commits.
     """
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute("BEGIN;")
         # Requeue abandoned work first so it no longer blocks later commands
         # in the same session. NULL leases are rows created by older workers.
         cur.execute(
