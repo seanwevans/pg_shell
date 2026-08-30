@@ -74,8 +74,13 @@ its PostgreSQL credentials, and the host outside `SHELL_ROOT` are trusted and
 must not be accessible to submitted commands. `run_subprocess` therefore builds
 a new environment containing only a fixed `PATH`, locale, the command account's
 identity variables, and values saved in `env_snapshot`. It never copies the
-worker environment, and rejects `DATABASE_URL` and `PG_CONN` even if a snapshot
-contains them.
+worker environment, and rejects reserved variables even if a snapshot contains
+them: the worker credentials `DATABASE_URL` and `PG_CONN`, every `LD_*`,
+`DYLD_*`, and `BASH_FUNC_*` name, and the glibc path overrides `GCONV_PATH`,
+`HOSTALIASES`, `LOCPATH`, `MALLOC_TRACE`, `NLSPATH`, and `RESOLV_HOST_CONF`.
+Those loader variables would otherwise run attacker-supplied code inside an
+allowlisted binary without executing anything new, defeating
+`EXECUTOR_ALLOWED_COMMANDS`. Matching is case-insensitive.
 
 Production deployments must create a dedicated, unprivileged OS account and
 configure an absolute-path executable allowlist. The allowlist is the required

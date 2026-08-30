@@ -38,7 +38,26 @@ MAX_OUTPUT_BYTES = int(os.getenv("MAX_OUTPUT_BYTES", "65536"))
 TRUNCATION_SUFFIX = "...[truncated]"
 TERMINATION_GRACE_SECONDS = 0.5
 PIPE_DRAIN_TIMEOUT_SECONDS = 0.5
-RESERVED_COMMAND_ENV = frozenset({"DATABASE_URL", "PG_CONN"})
+RESERVED_COMMAND_ENV = frozenset(
+    {
+        # Worker credentials.
+        "DATABASE_URL",
+        "PG_CONN",
+        # glibc path overrides that make an already-allowlisted binary load or
+        # read attacker-controlled files without executing anything new.
+        "GCONV_PATH",
+        "HOSTALIASES",
+        "LOCPATH",
+        "MALLOC_TRACE",
+        "NLSPATH",
+        "RESOLV_HOST_CONF",
+    }
+)
+# Dynamic loader controls. ``LD_PRELOAD`` and friends run attacker-supplied
+# code inside an allowlisted binary, so honouring them from a command's
+# ``env_snapshot`` would defeat EXECUTOR_ALLOWED_COMMANDS entirely.
+# ``BASH_FUNC_*`` smuggles exported shell functions into any allowlisted shell.
+RESERVED_COMMAND_ENV_PREFIXES = ("LD_", "DYLD_", "BASH_FUNC_")
 DEFAULT_COMMAND_PATH = "/usr/local/bin:/usr/bin:/bin"
 LEASE_SECONDS = float(os.getenv("COMMAND_LEASE_SECONDS", "60"))
 LEASE_REFRESH_SECONDS = float(
@@ -237,6 +256,19 @@ def refresh_lease(conn, cmd_id: int, worker_id: str = WORKER_ID) -> bool:
     return refreshed
 
 
+def _is_reserved_command_env(name: str) -> bool:
+    """Report whether ``name`` must never be taken from ``env_snapshot``.
+
+    Snapshots come from untrusted submitters, so they may not carry worker
+    credentials or any variable that changes what an allowlisted executable
+    loads or runs.
+    """
+    upper = name.upper()
+    return upper in RESERVED_COMMAND_ENV or upper.startswith(
+        RESERVED_COMMAND_ENV_PREFIXES
+    )
+
+
 def run_subprocess(
     command: str,
     cwd: str,
@@ -257,7 +289,7 @@ def run_subprocess(
             snapshot = env_snapshot
         if not isinstance(snapshot, dict):
             raise ValueError("env_snapshot must be a JSON object")
-        reserved = RESERVED_COMMAND_ENV.intersection(snapshot)
+        reserved = {name for name in snapshot if _is_reserved_command_env(name)}
         if reserved:
             names = ", ".join(sorted(reserved))
             raise ValueError(f"reserved environment variable(s): {names}")
