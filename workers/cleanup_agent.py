@@ -7,6 +7,17 @@ import time
 from workers.db import get_conn
 
 RETRY_DELAY_SECONDS = 5
+DEFAULT_SHELL_ROOT = "/home/sandbox"
+
+
+def shell_root() -> str:
+    """Return the sandbox root a reset session should start from.
+
+    Must agree with executor_agent's ``SHELL_ROOT``: a reset session whose cwd
+    sits outside that root cannot run anything, because the executor passes
+    the cwd straight to the subprocess.
+    """
+    return os.getenv("SHELL_ROOT", DEFAULT_SHELL_ROOT)
 
 
 def cleanup_once(conn, days: int) -> None:
@@ -32,10 +43,10 @@ def cleanup_once(conn, days: int) -> None:
         cur.execute(
             """
             UPDATE environments
-               SET cwd = '/home/sandbox', env = '{}'::jsonb, updated_at = now()
+               SET cwd = %s, env = '{}'::jsonb, updated_at = now()
              WHERE updated_at < now() - %s * interval '1 day'
             """,
-            (days,),
+            (shell_root(), days),
         )
         reset = cur.rowcount
         logging.info("Reset %d stale environments", reset)

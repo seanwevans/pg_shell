@@ -343,7 +343,37 @@ def test_cleanup_once_resets_env(conn):
         cur.execute("SELECT cwd, env FROM environments WHERE user_id = %s", (uid_str,))
         cwd, env = cur.fetchone()
 
-    assert cwd == "/home/sandbox"
+    assert cwd == cleanup_agent.DEFAULT_SHELL_ROOT
+    assert env == {}
+
+
+def test_cleanup_once_resets_env_to_configured_shell_root(conn, monkeypatch):
+    """A reset session must land inside the executor's SHELL_ROOT.
+
+    The executor hands environments.cwd straight to the subprocess, so
+    resetting to a hardcoded /home/sandbox in a deployment that configured a
+    different SHELL_ROOT leaves the session unable to run anything.
+    """
+    monkeypatch.setenv("SHELL_ROOT", "/home/pg-shell-command")
+    uid_str = str(uuid.uuid4())
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO users (id, username) VALUES (%s, %s)",
+            (uid_str, "shell-root-user"),
+        )
+        cur.execute(
+            "INSERT INTO environments (user_id, cwd, env, updated_at) "
+            "VALUES (%s, %s, %s::jsonb, now() - interval '100 days')",
+            (uid_str, "/home/pg-shell-command/deep", '{"k":1}'),
+        )
+
+    cleanup_once(conn, 90)
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT cwd, env FROM environments WHERE user_id = %s", (uid_str,))
+        cwd, env = cur.fetchone()
+
+    assert cwd == "/home/pg-shell-command"
     assert env == {}
 
 
