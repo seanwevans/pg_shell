@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import select
 import time
 import uuid
@@ -107,11 +108,14 @@ def test_submit_and_latest_output(conn):
         cur.execute("SELECT * FROM latest_output(%s, %s)", (user_id, session_id))
         rows = cur.fetchall()
 
+        # The backfill keeps the newest 20 commands but hands them back
+        # oldest-first, so a caller can render them as a transcript and then
+        # append later rows from the p_since_id branch without reversing.
         assert len(rows) == 20
-        expected_ids = list(reversed(cmd_ids))[:20]
+        expected_ids = cmd_ids[-20:]
         assert [row[0] for row in rows] == expected_ids
-        assert rows[0][2] == "msg24"
-        assert rows[0][6] is not None
+        assert rows[-1][2] == "msg24"
+        assert rows[-1][6] is not None
 
 
 def test_submit_command_notifies(conn):
@@ -273,6 +277,59 @@ def test_latest_output_since_id(conn):
         expected_ids = ids[5:]
         assert len(rows) == len(expected_ids)
         assert [row[0] for row in rows] == expected_ids
+
+
+def test_latest_output_ordering_is_consistent_across_branches(conn):
+    """The backfill and the incremental branch must agree on row order.
+
+    The htmx UI replaces #output with the p_since_id = 0 fragment and appends
+    submissions with hx-swap="beforeend"; the CLI's ``tail`` prints rows in
+    the order it receives them. Either caller renders a scrambled transcript
+    if the two branches disagree.
+    """
+    user_id = str(uuid.uuid4())
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (user_id, "u4"))
+        session_id = _create_session(cur, user_id)
+        ids = []
+        for idx in range(5):
+            cur.execute(
+                "SELECT submit_command(%s, %s, %s)",
+                (user_id, session_id, f"echo ord{idx}"),
+            )
+            ids.append(cur.fetchone()[0])
+
+        cur.execute("SELECT id FROM latest_output(%s, %s, 0)", (user_id, session_id))
+        backfill = [row[0] for row in cur.fetchall()]
+        cur.execute(
+            "SELECT id FROM latest_output(%s, %s, %s)", (user_id, session_id, ids[1])
+        )
+        incremental = [row[0] for row in cur.fetchall()]
+
+    assert backfill == sorted(backfill), "backfill must be oldest-first"
+    assert incremental == sorted(incremental), "incremental must be oldest-first"
+    assert backfill == ids
+    assert incremental == ids[2:]
+
+
+def test_latest_output_html_renders_oldest_first(conn):
+    user_id = str(uuid.uuid4())
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO users(id, username) VALUES (%s, %s)", (user_id, "u5"))
+        session_id = _create_session(cur, user_id)
+        ids = []
+        for idx in range(3):
+            cur.execute(
+                "SELECT submit_command(%s, %s, %s)",
+                (user_id, session_id, f"echo html{idx}"),
+            )
+            ids.append(cur.fetchone()[0])
+
+        cur.execute("SELECT latest_output_html(%s, %s, 0)", (user_id, session_id))
+        fragment = cur.fetchone()[0]
+
+    rendered = [int(value) for value in re.findall(r'data-command-id="(\d+)"', fragment)]
+    assert rendered == ids
 
 
 def test_html_rpcs_render_escaped_fragments(conn):

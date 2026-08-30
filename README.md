@@ -63,7 +63,9 @@ the lease lifetime (60 seconds by default), and
 unique `EXECUTOR_WORKER_ID` for a singleton worker deployment to let its next
 instance immediately recover commands left by the previous instance at
 startup; otherwise a process-unique identifier is generated and abandoned
-work is recovered when its lease expires.
+work is recovered when its lease expires. Each poll considers up to
+`COMMAND_CLAIM_CANDIDATES` sessions (10 by default) and takes the first whose
+per-session claim is free, so one busy session does not delay the others.
 Commands are parsed with `shlex.split` before execution, so quoting rules follow
 POSIX shells but features like glob expansion are not performed.
 
@@ -74,8 +76,13 @@ its PostgreSQL credentials, and the host outside `SHELL_ROOT` are trusted and
 must not be accessible to submitted commands. `run_subprocess` therefore builds
 a new environment containing only a fixed `PATH`, locale, the command account's
 identity variables, and values saved in `env_snapshot`. It never copies the
-worker environment, and rejects `DATABASE_URL` and `PG_CONN` even if a snapshot
-contains them.
+worker environment, and rejects reserved variables even if a snapshot contains
+them: the worker credentials `DATABASE_URL` and `PG_CONN`, every `LD_*`,
+`DYLD_*`, and `BASH_FUNC_*` name, and the glibc path overrides `GCONV_PATH`,
+`HOSTALIASES`, `LOCPATH`, `MALLOC_TRACE`, `NLSPATH`, and `RESOLV_HOST_CONF`.
+Those loader variables would otherwise run attacker-supplied code inside an
+allowlisted binary without executing anything new, defeating
+`EXECUTOR_ALLOWED_COMMANDS`. Matching is case-insensitive.
 
 Production deployments must create a dedicated, unprivileged OS account and
 configure an absolute-path executable allowlist. The allowlist is the required
@@ -106,7 +113,10 @@ command environment rather than inherited wholesale.
 You can run `cleanup_agent.py` periodically. Command retention applies only to
 terminal statuses: `done` and `failed` commands older than `CLEANUP_DAYS` are
 deleted, while recent terminal commands and all `pending` or `running` commands
-are retained. Use `replay_agent.py` for session replays. The optional
+are retained. Sessions untouched for `CLEANUP_DAYS` also have their `cwd` and
+`env` reset, so give the cleanup agent the same `SHELL_ROOT` as the executor
+(both default to `/home/sandbox`); a session reset to a `cwd` outside the
+executor's `SHELL_ROOT` cannot run anything. Use `replay_agent.py` for session replays. The optional
 `monitor_agent.py` emits usage metrics like
 command counts and average run time to stdout or CSV.
 

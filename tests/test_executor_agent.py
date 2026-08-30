@@ -123,12 +123,59 @@ def test_run_subprocess_does_not_expose_worker_secrets(monkeypatch, tmp_path):
     assert output.splitlines() == ["None", "None"]
 
 
-@pytest.mark.parametrize("reserved", ["DATABASE_URL", "PG_CONN"])
+@pytest.mark.parametrize(
+    "reserved",
+    [
+        "DATABASE_URL",
+        "PG_CONN",
+        # Dynamic loader controls: these run attacker-supplied code inside an
+        # allowlisted binary, so they would defeat EXECUTOR_ALLOWED_COMMANDS.
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "LD_AUDIT",
+        "DYLD_INSERT_LIBRARIES",
+        "BASH_FUNC_ls%%",
+        # glibc path overrides with the same effect.
+        "GCONV_PATH",
+        "LOCPATH",
+        "NLSPATH",
+        "HOSTALIASES",
+        "RESOLV_HOST_CONF",
+        "MALLOC_TRACE",
+        # Names are matched case-insensitively; the loader does the same.
+        "ld_preload",
+    ],
+)
 def test_run_subprocess_rejects_reserved_snapshot_variables(
     monkeypatch, tmp_path, reserved
 ):
     with pytest.raises(ValueError, match="reserved environment variable"):
         run_subprocess("python3 -c 'pass'", str(tmp_path), {reserved: "secret"})
+
+
+def test_run_subprocess_rejects_ld_preload_before_launching(monkeypatch, tmp_path):
+    """LD_PRELOAD must be refused rather than handed to the dynamic loader."""
+
+    def fail_popen(*args, **kwargs):  # pragma: no cover - must not be reached
+        pytest.fail("subprocess launched with an attacker-controlled loader")
+
+    monkeypatch.setattr(workers.executor_agent.subprocess, "Popen", fail_popen)
+
+    with pytest.raises(ValueError, match="LD_PRELOAD"):
+        run_subprocess(
+            "python3 -c 'pass'",
+            str(tmp_path),
+            {"LD_PRELOAD": str(tmp_path / "evil.so")},
+        )
+
+
+def test_run_subprocess_allows_unreserved_snapshot_variables(tmp_path):
+    """The prefix rule must not swallow ordinary variables."""
+    cmd = "python3 -c 'import os;print(os.environ[\"LDAP_URL\"])'"
+    exit_code, output = run_subprocess(cmd, str(tmp_path), {"LDAP_URL": "ldap://x"})
+
+    assert exit_code == 0
+    assert "ldap://x" in output
 
 
 def test_handle_command_uses_combined_output(monkeypatch):

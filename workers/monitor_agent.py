@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """pg_shell monitor agent.
 
 Collects usage statistics from the ``commands`` table. Metrics include
@@ -8,6 +6,8 @@ command counts per user per day and the approximate time between
 submission and completion. Results are printed to stdout or optionally
 written to a CSV file.
 """
+
+from __future__ import annotations
 
 import argparse
 import csv
@@ -25,6 +25,13 @@ STATE_AGENT_NAME = "monitor_agent"
 
 
 def ensure_monitor_state_table(conn) -> None:
+    """Create the watermark table, committing so it outlives this run.
+
+    Without the commit the CREATE TABLE is rolled back whenever the run does
+    not reach save_monitor_state -- always under --since-hours/--since-days,
+    and on any run with nothing new to report -- so the agent recreated the
+    table on every poll and never kept a watermark.
+    """
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -36,6 +43,7 @@ def ensure_monitor_state_table(conn) -> None:
             )
             """
         )
+    conn.commit()
 
 
 def load_monitor_state(conn) -> tuple[datetime | None, int]:
@@ -216,7 +224,7 @@ def upsert_csv_metrics(path: str, rows: Iterator[Row]) -> None:
     os.replace(temporary_path, path)
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description="Collect usage metrics")
     parser.add_argument(
         "--interval",

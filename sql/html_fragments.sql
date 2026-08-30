@@ -51,14 +51,14 @@ AS $$
         pg_shell_html_escape(result.status),
         pg_shell_html_escape(result.exit_code::TEXT)
       ),
-      '' ORDER BY result.row_number
+      '' ORDER BY result.id
     ),
     ''
   )::"text/html"
-  FROM (
-    SELECT row_number() OVER () AS row_number, output.*
-      FROM latest_output(p_user_id, p_session_id, p_since_id) AS output
-  ) AS result
+  -- Ordering by id keeps the fragment a chronological transcript. A bare
+  -- row_number() OVER () would instead depend on the order the planner
+  -- happened to emit latest_output's rows in.
+  FROM latest_output(p_user_id, p_session_id, p_since_id) AS result
 $$;
 
 CREATE OR REPLACE FUNCTION submit_command_html(

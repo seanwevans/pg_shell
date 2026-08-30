@@ -12,10 +12,16 @@ import shutil
 import uuid
 
 import psycopg2
+import psycopg2.extensions
 import pytest
 
 import workers.executor_agent
-from workers.executor_agent import fetch_pending, handle_command, recover_worker_commands
+from workers.executor_agent import (
+    _release_user_claim,
+    fetch_pending,
+    handle_command,
+    recover_worker_commands,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -109,6 +115,105 @@ def test_executor_cd_updates_environment(db_conn, monkeypatch, tmp_path):
         assert cur.fetchone()[0] == "done"
         cur.execute("SELECT cwd FROM environments WHERE session_id = %s", (session_id,))
         assert cur.fetchone()[0] == str(sub)
+
+
+def test_fetch_pending_skips_a_session_whose_claim_lock_is_held(db_conn):
+    """A busy session must not hide every session queued behind it.
+
+    SPEC.md section 3 requires per-user serialization "while still allowing
+    different users to execute concurrently". fetch_pending used to look at a
+    single candidate row and return None when its advisory lock was taken, so
+    one session whose lock was held by a peer worker (for instance after its
+    lease expired but before it finished) starved every other session for as
+    long as that worker held the lock.
+    """
+    busy_user, busy_session = _create_user_with_env(db_conn, "/tmp")
+    free_user, free_session = _create_user_with_env(db_conn, "/tmp")
+
+    with db_conn.cursor() as cur:
+        # The blocked session's command is submitted first, so it sorts ahead.
+        cur.execute(
+            "SELECT submit_command(%s, %s, %s)", (busy_user, busy_session, "echo busy")
+        )
+        busy_id = cur.fetchone()[0]
+        cur.execute(
+            "SELECT submit_command(%s, %s, %s)", (free_user, free_session, "echo free")
+        )
+        free_id = cur.fetchone()[0]
+        cur.execute("SELECT hashtextextended(%s, 0)", (busy_session,))
+        busy_lock_key = cur.fetchone()[0]
+
+    # A peer worker on its own connection holds the busy session's claim lock.
+    peer = psycopg2.connect(os.environ["TEST_DATABASE_URL"])
+    peer.autocommit = True
+    try:
+        with peer.cursor() as cur:
+            cur.execute("SELECT pg_advisory_lock(%s)", (busy_lock_key,))
+
+        db_conn.autocommit = False
+        row = None
+        try:
+            row = fetch_pending(db_conn)
+            assert row is not None, "poll gave up instead of trying the next session"
+            assert row["id"] == free_id
+            assert str(row["session_id"]) == free_session
+        finally:
+            if row is not None:
+                _release_user_claim(db_conn, row)
+            db_conn.autocommit = True
+    finally:
+        peer.close()
+
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, status FROM commands WHERE id IN (%s, %s) ORDER BY id",
+            (busy_id, free_id),
+        )
+        statuses = dict(cur.fetchall())
+
+    # The blocked session is left untouched for the worker that owns it.
+    assert statuses[busy_id] == "pending"
+    assert statuses[free_id] == "running"
+
+
+def test_fetch_pending_claims_atomically_without_server_warnings(db_conn):
+    """The claim is one transaction, and it does not warn on every poll.
+
+    fetch_pending used to open its transaction with an explicit ``BEGIN``,
+    which psycopg2 had already issued implicitly. PostgreSQL answered every
+    single poll with ``WARNING: there is already a transaction in progress``,
+    so a worker polling once a second wrote 86,400 warnings a day into the
+    server log.
+    """
+    user_id, session_id = _create_user_with_env(db_conn, "/tmp")
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT submit_command(%s, %s, %s)", (user_id, session_id, "echo warn")
+        )
+        cmd_id = cur.fetchone()[0]
+
+    db_conn.autocommit = False
+    del db_conn.notices[:]
+    try:
+        row = fetch_pending(db_conn)
+        assert row is not None and row["id"] == cmd_id
+        # Still a single transaction: the claim is not visible until commit,
+        # and fetch_pending commits before returning.
+        assert db_conn.get_transaction_status() == (
+            psycopg2.extensions.TRANSACTION_STATUS_IDLE
+        )
+        notices = list(db_conn.notices)
+    finally:
+        _release_user_claim(db_conn, row)
+        db_conn.autocommit = True
+
+    assert not [n for n in notices if "already a transaction in progress" in n], notices
+
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status, worker_id FROM commands WHERE id = %s", (cmd_id,))
+        status, worker_id = cur.fetchone()
+    assert status == "running"
+    assert worker_id is not None
 
 
 def test_fetch_pending_returns_none_when_idle(db_conn):

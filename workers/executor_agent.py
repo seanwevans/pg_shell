@@ -38,8 +38,30 @@ MAX_OUTPUT_BYTES = int(os.getenv("MAX_OUTPUT_BYTES", "65536"))
 TRUNCATION_SUFFIX = "...[truncated]"
 TERMINATION_GRACE_SECONDS = 0.5
 PIPE_DRAIN_TIMEOUT_SECONDS = 0.5
-RESERVED_COMMAND_ENV = frozenset({"DATABASE_URL", "PG_CONN"})
+RESERVED_COMMAND_ENV = frozenset(
+    {
+        # Worker credentials.
+        "DATABASE_URL",
+        "PG_CONN",
+        # glibc path overrides that make an already-allowlisted binary load or
+        # read attacker-controlled files without executing anything new.
+        "GCONV_PATH",
+        "HOSTALIASES",
+        "LOCPATH",
+        "MALLOC_TRACE",
+        "NLSPATH",
+        "RESOLV_HOST_CONF",
+    }
+)
+# Dynamic loader controls. ``LD_PRELOAD`` and friends run attacker-supplied
+# code inside an allowlisted binary, so honouring them from a command's
+# ``env_snapshot`` would defeat EXECUTOR_ALLOWED_COMMANDS entirely.
+# ``BASH_FUNC_*`` smuggles exported shell functions into any allowlisted shell.
+RESERVED_COMMAND_ENV_PREFIXES = ("LD_", "DYLD_", "BASH_FUNC_")
 DEFAULT_COMMAND_PATH = "/usr/local/bin:/usr/bin:/bin"
+# How many sessions a single poll may try before giving up. One session
+# whose claim lock is held elsewhere must not hide every other session.
+CLAIM_CANDIDATES = int(os.getenv("COMMAND_CLAIM_CANDIDATES", "10"))
 LEASE_SECONDS = float(os.getenv("COMMAND_LEASE_SECONDS", "60"))
 LEASE_REFRESH_SECONDS = float(
     os.getenv("COMMAND_LEASE_REFRESH_SECONDS", str(max(1.0, LEASE_SECONDS / 3)))
@@ -144,9 +166,17 @@ def fetch_pending(conn, worker_id: str = WORKER_ID) -> Dict[str, Any] | None:
     run a command for the same user concurrently.  Snapshots are refreshed from
     the user's effective environment at claim time, after all preceding
     commands have reached a terminal state.
+
+    Up to ``CLAIM_CANDIDATES`` sessions are considered per poll and the first
+    one whose claim lock is free is taken.  Sessions are independent, so a
+    session locked by another worker must be stepped over rather than ending
+    the poll -- otherwise it would hide every session behind it.
+
+    ``conn`` must not be in autocommit mode: the requeue, the claim and the
+    row lock all have to land in one transaction, which psycopg2 opens
+    implicitly on the first statement below and this function commits.
     """
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute("BEGIN;")
         # Requeue abandoned work first so it no longer blocks later commands
         # in the same session. NULL leases are rows created by older workers.
         cur.execute(
@@ -175,14 +205,19 @@ def fetch_pending(conn, worker_id: str = WORKER_ID) -> Dict[str, Any] | None:
               )
             ORDER BY c.submitted_at, c.id
             FOR UPDATE SKIP LOCKED
-            LIMIT 1
-            """)
-        row = cur.fetchone()
+            LIMIT %s
+            """, (CLAIM_CANDIDATES,))
+        # The NOT EXISTS above admits at most one command per session, so
+        # these candidates are distinct sessions in submission order.
+        row = None
+        for candidate in cur.fetchall():
+            cur.execute(
+                "SELECT pg_try_advisory_lock(%s)", (candidate["claim_lock_key"],)
+            )
+            if cur.fetchone()["pg_try_advisory_lock"]:
+                row = candidate
+                break
         if row:
-            cur.execute("SELECT pg_try_advisory_lock(%s)", (row["claim_lock_key"],))
-            if not cur.fetchone()["pg_try_advisory_lock"]:
-                conn.commit()
-                return None
             cur.execute(
                 """
                 UPDATE commands
@@ -237,6 +272,19 @@ def refresh_lease(conn, cmd_id: int, worker_id: str = WORKER_ID) -> bool:
     return refreshed
 
 
+def _is_reserved_command_env(name: str) -> bool:
+    """Report whether ``name`` must never be taken from ``env_snapshot``.
+
+    Snapshots come from untrusted submitters, so they may not carry worker
+    credentials or any variable that changes what an allowlisted executable
+    loads or runs.
+    """
+    upper = name.upper()
+    return upper in RESERVED_COMMAND_ENV or upper.startswith(
+        RESERVED_COMMAND_ENV_PREFIXES
+    )
+
+
 def run_subprocess(
     command: str,
     cwd: str,
@@ -257,7 +305,7 @@ def run_subprocess(
             snapshot = env_snapshot
         if not isinstance(snapshot, dict):
             raise ValueError("env_snapshot must be a JSON object")
-        reserved = RESERVED_COMMAND_ENV.intersection(snapshot)
+        reserved = {name for name in snapshot if _is_reserved_command_env(name)}
         if reserved:
             names = ", ".join(sorted(reserved))
             raise ValueError(f"reserved environment variable(s): {names}")

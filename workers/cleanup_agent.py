@@ -6,6 +6,19 @@ import time
 
 from workers.db import get_conn
 
+RETRY_DELAY_SECONDS = 5
+DEFAULT_SHELL_ROOT = "/home/sandbox"
+
+
+def shell_root() -> str:
+    """Return the sandbox root a reset session should start from.
+
+    Must agree with executor_agent's ``SHELL_ROOT``: a reset session whose cwd
+    sits outside that root cannot run anything, because the executor passes
+    the cwd straight to the subprocess.
+    """
+    return os.getenv("SHELL_ROOT", DEFAULT_SHELL_ROOT)
+
 
 def cleanup_once(conn, days: int) -> None:
     """Remove commands and reset environments older than ``days`` days.
@@ -30,17 +43,17 @@ def cleanup_once(conn, days: int) -> None:
         cur.execute(
             """
             UPDATE environments
-               SET cwd = '/home/sandbox', env = '{}'::jsonb, updated_at = now()
+               SET cwd = %s, env = '{}'::jsonb, updated_at = now()
              WHERE updated_at < now() - %s * interval '1 day'
             """,
-            (days,),
+            (shell_root(), days),
         )
         reset = cur.rowcount
         logging.info("Reset %d stale environments", reset)
     conn.commit()
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(
         description="Cleanup old commands and environments"
     )
@@ -74,19 +87,32 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     while True:
+        # A database outage must not end the daemon: it is the periodic
+        # retention job, so giving up means retention silently stops until
+        # somebody notices. --once still reports the failure to its caller.
         try:
             conn = get_conn()
         except RuntimeError as exc:
             logging.error("Cleanup agent failed to connect to database: %s", exc)
-            break
+            if args.once:
+                return 1
+            time.sleep(min(args.interval, RETRY_DELAY_SECONDS))
+            continue
+
         try:
             cleanup_once(conn, args.days)
+        except Exception:
+            logging.exception("Cleanup run failed")
+            failed = True
+        else:
+            failed = False
         finally:
             conn.close()
+
         if args.once:
-            break
-        time.sleep(args.interval)
+            return 1 if failed else 0
+        time.sleep(min(args.interval, RETRY_DELAY_SECONDS) if failed else args.interval)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
