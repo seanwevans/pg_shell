@@ -25,6 +25,13 @@ STATE_AGENT_NAME = "monitor_agent"
 
 
 def ensure_monitor_state_table(conn) -> None:
+    """Create the watermark table, committing so it outlives this run.
+
+    Without the commit the CREATE TABLE is rolled back whenever the run does
+    not reach save_monitor_state -- always under --since-hours/--since-days,
+    and on any run with nothing new to report -- so the agent recreated the
+    table on every poll and never kept a watermark.
+    """
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -36,6 +43,7 @@ def ensure_monitor_state_table(conn) -> None:
             )
             """
         )
+    conn.commit()
 
 
 def load_monitor_state(conn) -> tuple[datetime | None, int]:

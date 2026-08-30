@@ -1,6 +1,9 @@
+import os
 from datetime import datetime
 
 import csv
+
+import psycopg2
 
 import workers.monitor_agent as monitor_agent
 
@@ -173,3 +176,50 @@ def test_compute_since_timestamp_rejects_dual_window_args():
         pass
     else:  # pragma: no cover - defensive
         raise AssertionError("Expected ValueError when both windows are set")
+
+
+def test_ensure_monitor_state_table_commits(monkeypatch):
+    """The CREATE TABLE must be committed, not left to a later save.
+
+    Runs that never reach save_monitor_state -- every --since-hours or
+    --since-days run, and any run with nothing new -- otherwise rolled the
+    table back on close, so the watermark could never be kept.
+    """
+    calls = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, query, params=None):
+            calls.append("execute")
+
+    class FakeConn:
+        def cursor(self):
+            return FakeCursor()
+
+        def commit(self):
+            calls.append("commit")
+
+    monitor_agent.ensure_monitor_state_table(FakeConn())
+
+    assert calls == ["execute", "commit"]
+
+
+def test_ensure_monitor_state_table_persists_without_a_watermark(db_conn):
+    """End to end: the table survives a run that saves no watermark."""
+    with db_conn.cursor() as cur:
+        cur.execute("DROP TABLE IF EXISTS monitor_state")
+
+    conn = psycopg2.connect(os.environ["TEST_DATABASE_URL"])
+    try:
+        monitor_agent.ensure_monitor_state_table(conn)
+    finally:
+        conn.close()  # rolls back anything left uncommitted
+
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('monitor_state') IS NOT NULL")
+        assert cur.fetchone()[0] is True
