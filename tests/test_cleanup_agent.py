@@ -107,6 +107,83 @@ def conn():
     conn.close()
 
 
+def test_main_retries_after_a_connection_failure(monkeypatch, caplog):
+    """A database outage must not silently end the retention daemon."""
+    attempts = []
+
+    def flaky_get_conn():
+        attempts.append(len(attempts))
+        if len(attempts) < 3:
+            raise RuntimeError("connection refused")
+        raise KeyboardInterrupt  # stand in for operator shutdown
+
+    sleeps = []
+    monkeypatch.setattr(cleanup_agent, "get_conn", flaky_get_conn)
+    monkeypatch.setattr(cleanup_agent.time, "sleep", sleeps.append)
+    monkeypatch.setattr(sys, "argv", ["cleanup_agent.py", "--interval", "3600"])
+
+    with pytest.raises(KeyboardInterrupt):
+        cleanup_agent.main()
+
+    assert len(attempts) == 3, "daemon gave up instead of retrying"
+    # Retries back off by RETRY_DELAY_SECONDS, not the full 3600s interval.
+    assert sleeps == [cleanup_agent.RETRY_DELAY_SECONDS] * 2
+
+
+def test_main_retries_after_a_failed_cleanup_run(monkeypatch):
+    """An error mid-run must not end the daemon either."""
+    closed = []
+
+    class FakeConn:
+        def close(self):
+            closed.append(True)
+
+    runs = []
+
+    def flaky_cleanup_once(conn, days):
+        runs.append(days)
+        if len(runs) < 2:
+            raise psycopg2.OperationalError("server closed the connection")
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cleanup_agent, "get_conn", FakeConn)
+    monkeypatch.setattr(cleanup_agent, "cleanup_once", flaky_cleanup_once)
+    monkeypatch.setattr(cleanup_agent.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(sys, "argv", ["cleanup_agent.py"])
+
+    with pytest.raises(KeyboardInterrupt):
+        cleanup_agent.main()
+
+    assert len(runs) == 2
+    assert len(closed) == 2, "the connection must be closed on every path"
+
+
+@pytest.mark.parametrize(
+    "failure", [RuntimeError("no dsn"), psycopg2.OperationalError("boom")]
+)
+def test_main_once_reports_failure_through_exit_status(monkeypatch, failure):
+    """--once must exit non-zero so a supervisor or cron notices."""
+    if isinstance(failure, RuntimeError):
+        monkeypatch.setattr(
+            cleanup_agent, "get_conn", lambda: (_ for _ in ()).throw(failure)
+        )
+    else:
+
+        class FakeConn:
+            def close(self):
+                pass
+
+        monkeypatch.setattr(cleanup_agent, "get_conn", FakeConn)
+        monkeypatch.setattr(
+            cleanup_agent,
+            "cleanup_once",
+            lambda conn, days: (_ for _ in ()).throw(failure),
+        )
+    monkeypatch.setattr(sys, "argv", ["cleanup_agent.py", "--once"])
+
+    assert cleanup_agent.main() == 1
+
+
 def test_cleanup_once_deletes_only_old_terminal_commands(conn):
     uid_str = str(uuid.uuid4())
     with conn.cursor() as cur:

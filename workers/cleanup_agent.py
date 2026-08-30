@@ -6,6 +6,8 @@ import time
 
 from workers.db import get_conn
 
+RETRY_DELAY_SECONDS = 5
+
 
 def cleanup_once(conn, days: int) -> None:
     """Remove commands and reset environments older than ``days`` days.
@@ -40,7 +42,7 @@ def cleanup_once(conn, days: int) -> None:
     conn.commit()
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(
         description="Cleanup old commands and environments"
     )
@@ -74,19 +76,32 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     while True:
+        # A database outage must not end the daemon: it is the periodic
+        # retention job, so giving up means retention silently stops until
+        # somebody notices. --once still reports the failure to its caller.
         try:
             conn = get_conn()
         except RuntimeError as exc:
             logging.error("Cleanup agent failed to connect to database: %s", exc)
-            break
+            if args.once:
+                return 1
+            time.sleep(min(args.interval, RETRY_DELAY_SECONDS))
+            continue
+
         try:
             cleanup_once(conn, args.days)
+        except Exception:
+            logging.exception("Cleanup run failed")
+            failed = True
+        else:
+            failed = False
         finally:
             conn.close()
+
         if args.once:
-            break
-        time.sleep(args.interval)
+            return 1 if failed else 0
+        time.sleep(min(args.interval, RETRY_DELAY_SECONDS) if failed else args.interval)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
