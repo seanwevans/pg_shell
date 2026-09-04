@@ -53,6 +53,28 @@ jobs:
           # Turn Pages on for the repository if an admin has not already.
           enablement: true
 
+      # A repository whose Pages source is still "Deploy from a branch" keeps
+      # serving that branch's Jekyll build, and actions/deploy-pages reports
+      # success regardless: the workflow goes green while the live site never
+      # changes. configure-pages only sets the source when it creates the site,
+      # so an already-enabled repository has to be switched over explicitly.
+      - name: Serve Pages from this workflow, not from a branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          source_type=$(gh api "repos/$GITHUB_REPOSITORY/pages" --jq .build_type 2>/dev/null || echo unknown)
+          echo "Pages build_type is currently: $source_type"
+          if [ "$source_type" = workflow ]; then
+            exit 0
+          fi
+          if gh api -X PUT "repos/$GITHUB_REPOSITORY/pages" -f build_type=workflow; then
+            echo "Switched the Pages source to GitHub Actions."
+            exit 0
+          fi
+          echo "::error::Pages builds from a branch (build_type=$source_type), so this deployment will not be visible and the branch's Jekyll build keeps serving. Set Settings -> Pages -> Build and deployment -> Source to 'GitHub Actions', then re-run this workflow."
+          exit 1
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
