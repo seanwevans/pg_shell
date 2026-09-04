@@ -31,6 +31,24 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - run: pip install -r requirements.txt
       - run: python -m playwright install --with-deps chromium
+
+      # The GitHub Pages demo in web/ runs this repository's SQL in the
+      # browser, so it is tested alongside everything else. Building it also
+      # lets tests/test_web_demo.py run instead of skipping.
+      - name: Install demo build dependencies
+        run: npm ci
+        working-directory: web
+      - name: Unit-test the browser executor
+        run: npm test
+        working-directory: web
+      - name: Build the demo site
+        run: node web/build.mjs
+
       - run: python -m pytest -q

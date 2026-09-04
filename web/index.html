@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src 'self' blob: data:; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
+<title>pg_shell — a shell that lives in PostgreSQL</title>
+<meta name="description" content="A live pg_shell instance: PostgreSQL compiled to WebAssembly, the project's own SQL, and htmx swapping database-rendered HTML." />
+<!-- htmx injects a <style> element for its indicator classes on load, which the
+     style-src directive above refuses. The page uses no indicators, so turn it off. -->
+<meta name="htmx-config" content='{"includeIndicatorStyles": false}' />
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="assets/app.css" />
+<script defer src="vendor/htmx-1.9.12.min.js"></script>
+<script type="module" src="assets/app.js"></script>
+</head>
+<body>
+
+<div id="boot" class="boot">
+  <div class="boot-card">
+    <h1 class="boot-title">pg_shell</h1>
+    <p class="boot-line" id="boot-status">starting PostgreSQL (WebAssembly)</p>
+    <div class="boot-track"><div class="boot-bar"></div></div>
+    <p class="boot-note">A full PostgreSQL server is being downloaded and started in this tab. First load moves about 17&nbsp;MB; after that the database is cached.</p>
+  </div>
+</div>
+
+<header class="masthead">
+  <div class="masthead-identity">
+    <h1>pg_shell</h1>
+    <p>A stateless, auditable, replayable shell whose entire backend is a PostgreSQL database.</p>
+  </div>
+  <dl class="masthead-facts">
+    <div><dt>Postgres</dt><dd id="fact-version">—</dd></div>
+    <div><dt>Executor</dt><dd id="fact-executor">—</dd></div>
+    <div><dt>Session</dt><dd id="fact-session" class="mono">—</dd></div>
+  </dl>
+</header>
+
+<main class="workbench">
+
+  <section class="panel terminal" aria-labelledby="terminal-heading">
+    <div class="panel-head">
+      <h2 id="terminal-heading">Terminal</h2>
+      <p class="panel-sub">htmx swaps HTML rendered by <code>latest_output_html()</code></p>
+    </div>
+
+    <!-- These attributes are the ones from html/index.html. The RPC calls are
+         real; only the transport underneath them is local to this tab. -->
+    <div id="output"
+      class="transcript"
+      hx-disable
+      hx-get="/rpc/latest_output_html?p_user_id=USER_ID&amp;p_session_id=SESSION_ID"
+      hx-trigger="load, every 1s"
+      hx-headers='{"Accept": "text/html"}'
+      hx-swap="innerHTML">
+    </div>
+
+    <form id="prompt" class="prompt"
+      hx-disable
+      hx-post="/rpc/submit_command_html"
+      hx-trigger="submit from:form"
+      hx-target="#output"
+      hx-headers='{"Accept": "text/html"}'
+      hx-swap="beforeend"
+    >
+      <input type="hidden" name="p_user_id" value="USER_ID" />
+      <input type="hidden" name="p_session_id" value="SESSION_ID" />
+      <label class="prompt-sigil" for="command-input">$</label>
+      <input id="command-input" name="p_command" autocomplete="off" spellcheck="false" autofocus disabled placeholder="starting PostgreSQL…" />
+      <button type="submit" disabled>Run</button>
+    </form>
+
+    <p class="hint">
+      Every line above is a row in <code>commands</code>. Nothing is stored in the page —
+      reload and the transcript is rebuilt from the database.
+      <span id="rpc-error" class="rpc-error" hidden></span>
+    </p>
+  </section>
+
+  <section class="panel inspector" aria-labelledby="inspector-heading">
+    <div class="panel-head">
+      <h2 id="inspector-heading">Database</h2>
+      <p class="panel-sub">The same tables the deployed system runs on</p>
+    </div>
+
+    <div class="tabs" role="tablist">
+      <button role="tab" aria-selected="true" aria-controls="tab-audit" id="tabbtn-audit">Audit log</button>
+      <button role="tab" aria-selected="false" aria-controls="tab-sessions" id="tabbtn-sessions">Sessions</button>
+      <button role="tab" aria-selected="false" aria-controls="tab-sql" id="tabbtn-sql">SQL</button>
+    </div>
+
+    <div class="tabpanel" role="tabpanel" id="tab-audit" aria-labelledby="tabbtn-audit">
+      <div class="scroller"><table class="grid" id="audit-table"><tbody></tbody></table></div>
+      <p class="panel-foot">
+        <code>SELECT id, command, status, exit_code, submitted_at, completed_at FROM commands ORDER BY id DESC</code>
+      </p>
+    </div>
+
+    <div class="tabpanel" role="tabpanel" id="tab-sessions" aria-labelledby="tabbtn-sessions" hidden>
+      <div class="scroller"><table class="grid" id="sessions-table"><tbody></tbody></table></div>
+      <div class="actions">
+        <button id="action-new">New session</button>
+        <button id="action-fork">Fork from last command</button>
+        <button id="action-replay">Replay this session</button>
+      </div>
+      <p class="panel-foot">
+        <code>fork_session()</code> rebuilds an environment from a command's
+        <code>cwd_snapshot</code>/<code>env_snapshot</code>;
+        <code>replay_session()</code> re-queues the session's original commands under one
+        <code>replay_run_id</code>.
+      </p>
+    </div>
+
+    <div class="tabpanel" role="tabpanel" id="tab-sql" aria-labelledby="tabbtn-sql" hidden>
+      <!-- Deliberately not a <form>: the prompt above triggers on
+           "submit from:form", which htmx resolves against every form in the
+           document, so a second form here would post an empty command. -->
+      <div class="sql-form">
+        <label class="visually-hidden" for="sql-input">SQL to run</label>
+        <textarea id="sql-input" spellcheck="false" rows="3">SELECT id, command, status, exit_code FROM commands ORDER BY id DESC LIMIT 10;</textarea>
+        <div class="actions">
+          <button type="button" id="action-run-sql">Run query</button>
+          <button type="button" id="action-reset" class="danger">Reset database</button>
+        </div>
+      </div>
+      <div class="scroller"><table class="grid" id="sql-table"><tbody></tbody></table></div>
+      <p class="panel-foot" id="sql-status">Queries run against the same database the shell uses. ⌘/Ctrl+Enter runs.</p>
+    </div>
+  </section>
+
+</main>
+
+<footer class="colophon">
+  <p>
+    This page is a complete pg_shell instance. PostgreSQL runs in your browser
+    through <a href="https://pglite.dev" rel="noreferrer">PGlite</a>, and the schema, RPCs and
+    HTML fragments come from this repository's <code>sql/</code> directory, unmodified.
+    The one part that cannot be real in a browser tab is the executor: a tab has no
+    processes, so commands run against an in-memory filesystem from a fixed allowlist
+    rather than through <code>workers/executor_agent.py</code>.
+  </p>
+  <p class="colophon-links">
+    <a href="https://github.com/seanwevans/pg_shell">Source</a>
+    <a href="https://github.com/seanwevans/pg_shell/blob/main/SPEC.md">SPEC</a>
+    <a href="https://github.com/seanwevans/pg_shell/blob/main/README.md">README</a>
+  </p>
+</footer>
+
+</body>
+</html>

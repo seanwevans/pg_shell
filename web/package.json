@@ -1,0 +1,16 @@
+{
+  "name": "pg-shell-demo",
+  "private": true,
+  "version": "0.0.0",
+  "description": "In-browser pg_shell instance published to GitHub Pages",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "serve": "node build.mjs && node --run serve:site",
+    "serve:site": "node -e \"const{createServer}=require('node:http'),{readFile}=require('node:fs'),{extname,join,normalize}=require('node:path');const types={'.html':'text/html','.js':'text/javascript','.css':'text/css','.wasm':'application/wasm','.svg':'image/svg+xml','.sql':'text/plain','.data':'application/octet-stream'};createServer((q,s)=>{const p=join('../_site',normalize(q.url.split('?')[0]).replace(/^([.]{2}[/\\\\])+/,''));readFile(p.endsWith('/')?p+'index.html':p,(e,d)=>{if(e){s.writeHead(404);return s.end('not found')}s.writeHead(200,{'content-type':types[extname(p)]||'application/octet-stream'});s.end(d)})}).listen(8080,()=>console.log('http://localhost:8080'))\"",
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.8"
+  }
+}
