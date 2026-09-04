@@ -1,0 +1,314 @@
+/* pg_shell demo — a terminal-shaped page, so it commits to a single dark
+   treatment rather than following the viewer's colour scheme. */
+
+:root {
+  --bg: #080b10;
+  --panel: #0e141b;
+  --panel-2: #121a23;
+  --line: #1d2836;
+  --line-soft: #172230;
+  --text: #d5e0ea;
+  --muted: #7c8fa3;
+  --dim: #55677a;
+  --green: #7ee787;
+  --blue: #6cb6ff;
+  --amber: #f0b072;
+  --red: #ff7b72;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1100px 620px at 15% -12%, #10202c 0%, transparent 62%),
+    var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.55;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code { color: var(--green); font-size: 0.92em; }
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ---------- boot overlay ---------- */
+
+.boot {
+  position: fixed; inset: 0; z-index: 50;
+  display: grid; place-items: center;
+  background: var(--bg);
+  transition: opacity 260ms ease;
+}
+.boot[hidden] { display: none; }
+.boot.done { opacity: 0; pointer-events: none; }
+
+.boot-card { width: min(460px, 88vw); text-align: left; }
+.boot-title { margin: 0 0 6px; font-size: 22px; letter-spacing: 0.02em; }
+.boot-title::before { content: "$ "; color: var(--green); }
+.boot-line { margin: 0 0 14px; color: var(--muted); min-height: 1.55em; }
+.boot-line::after {
+  content: "▍"; color: var(--green);
+  animation: blink 1.05s steps(2, start) infinite;
+}
+@keyframes blink { to { visibility: hidden; } }
+
+.boot-track { height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.boot-bar {
+  height: 100%; width: 34%; border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--green), transparent);
+  animation: sweep 1.25s ease-in-out infinite;
+}
+@keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+
+.boot-note { margin: 14px 0 0; color: var(--dim); font-size: 12px; line-height: 1.5; }
+
+/* ---------- masthead ---------- */
+
+.masthead {
+  display: flex; flex-wrap: wrap; gap: 20px 32px;
+  align-items: flex-end; justify-content: space-between;
+  padding: 26px clamp(16px, 4vw, 40px) 20px;
+  border-bottom: 1px solid var(--line);
+}
+.masthead h1 { margin: 0; font-size: 19px; letter-spacing: 0.03em; }
+.masthead h1::before { content: "$ "; color: var(--green); }
+.masthead-identity p { margin: 5px 0 0; color: var(--muted); max-width: 62ch; }
+
+.masthead-facts { display: flex; gap: 26px; margin: 0; flex-wrap: wrap; }
+.masthead-facts dt { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.09em; }
+.masthead-facts dd { margin: 2px 0 0; color: var(--text); font-size: 12.5px; }
+.mono { font-variant-ligatures: none; }
+
+/* ---------- layout ---------- */
+
+.workbench {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: 16px;
+  padding: 16px clamp(16px, 4vw, 40px) 8px;
+  align-items: stretch;
+  min-height: 0;
+}
+@media (max-width: 940px) {
+  .workbench { grid-template-columns: minmax(0, 1fr); }
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  display: flex; flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.panel-head {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line-soft);
+  background: linear-gradient(180deg, var(--panel-2), transparent);
+}
+.panel-head h2 { margin: 0; font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text); }
+.panel-sub { margin: 3px 0 0; color: var(--dim); font-size: 12px; }
+
+/* ---------- terminal ---------- */
+
+.transcript {
+  flex: 1;
+  min-height: 320px;
+  max-height: 58vh;
+  overflow-y: auto;
+  padding: 14px 16px;
+  scrollbar-color: var(--line) transparent;
+}
+
+/* The markup below is emitted by latest_output_html() in sql/html_fragments.sql;
+   the styling has to work with that fixed shape. */
+.command-result {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.command-result:last-child { border-bottom: 0; }
+
+.command-result .command {
+  grid-column: 1;
+  margin: 0;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.command-result .command::before { content: "$ "; color: var(--green); }
+
+.command-result .command-output {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  margin: 2px 0 0;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.command-result .command-output:empty { display: none; }
+
+.command-result .command-status {
+  grid-column: 2; grid-row: 1;
+  align-self: start;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.command-result .exit-code {
+  grid-column: 2; grid-row: 2;
+  align-self: start; justify-self: end;
+  font-size: 11px; color: var(--dim);
+}
+.command-result .exit-code:not(:empty)::before { content: "exit "; }
+
+/* The fragment carries no status-specific class, so app.js copies the status
+   text onto the article as a data attribute after each swap and the colouring
+   keys off that. */
+.transcript .command-result[data-status="done"] .command-status { color: var(--green); border-color: #1f3a28; }
+.transcript .command-result[data-status="failed"] .command-status { color: var(--red); border-color: #40232a; }
+.transcript .command-result[data-status="running"] .command-status { color: var(--amber); border-color: #3d3120; }
+.transcript .command-result[data-status="pending"] .command-status { color: var(--blue); border-color: #1e3145; }
+.transcript .command-result[data-status="failed"] .exit-code { color: var(--red); }
+
+/* ---------- prompt ---------- */
+
+.prompt {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--panel-2);
+}
+.prompt-sigil { color: var(--green); }
+.prompt input[name="p_command"] {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  padding: 6px 0;
+  outline: none;
+  min-width: 0;
+}
+.prompt input::placeholder { color: var(--dim); }
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+button:hover { border-color: #2c3d4f; background: #16202b; }
+button:active { transform: translateY(1px); }
+button.danger { color: var(--red); }
+button[disabled] { opacity: 0.45; cursor: not-allowed; }
+
+.hint {
+  margin: 0;
+  padding: 9px 16px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--dim);
+  font-size: 12px;
+}
+.rpc-error { display: block; margin-top: 4px; color: var(--red); }
+
+/* ---------- inspector ---------- */
+
+.tabs { display: flex; gap: 4px; padding: 10px 12px 0; }
+.tabs button {
+  border: 0; border-bottom: 2px solid transparent;
+  background: transparent; border-radius: 0;
+  color: var(--dim); padding: 5px 10px;
+}
+.tabs button:hover { background: transparent; color: var(--text); }
+.tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--green); }
+
+.tabpanel { display: flex; flex-direction: column; min-height: 0; flex: 1; padding: 10px 12px 12px; gap: 10px; }
+.tabpanel[hidden] { display: none; }
+
+.scroller { overflow: auto; flex: 1; min-height: 140px; max-height: 46vh; border: 1px solid var(--line-soft); border-radius: 8px; }
+
+.grid { width: 100%; border-collapse: collapse; font-size: 12px; }
+.grid th, .grid td {
+  text-align: left;
+  padding: 5px 9px;
+  border-bottom: 1px solid var(--line-soft);
+  white-space: nowrap;
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.grid thead th {
+  position: sticky; top: 0;
+  background: var(--panel-2);
+  color: var(--dim);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-size: 10.5px;
+  z-index: 1;
+}
+.grid tbody tr:hover { background: #131c26; }
+.grid .empty { color: var(--dim); white-space: normal; }
+.grid td.wrap { white-space: normal; }
+
+.status-done { color: var(--green); }
+.status-failed { color: var(--red); }
+.status-running { color: var(--amber); }
+.status-pending { color: var(--blue); }
+.is-current { color: var(--green); }
+
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.panel-foot { margin: 0; color: var(--dim); font-size: 11.5px; line-height: 1.5; }
+
+.sql-form { display: flex; flex-direction: column; gap: 8px; }
+#sql-input {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 11px;
+  resize: vertical;
+  outline: none;
+}
+#sql-input:focus { border-color: #2c4257; }
+#sql-status.error { color: var(--red); }
+
+/* ---------- colophon ---------- */
+
+.colophon {
+  padding: 18px clamp(16px, 4vw, 40px) 30px;
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.6;
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+}
+.colophon p { margin: 0; max-width: 96ch; }
+.colophon-links { margin-top: 8px; display: flex; gap: 18px; }

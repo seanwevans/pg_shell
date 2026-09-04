@@ -4,6 +4,13 @@
 
 A stateless, auditable, replayable command shell powered entirely by PostgreSQL and htmx.
 
+**▶ Try it: <https://seanwevans.github.io/pg_shell/>** — a complete pg_shell
+instance running in your browser. PostgreSQL is compiled to WebAssembly and
+this repository's `sql/` is installed into it on load, so the schema, the RPCs
+and the HTML fragments are the real ones; only the HTTP gateway and the command
+executor are browser stand-ins. See [`web/README.md`](web/README.md) for what
+that swaps out and why.
+
 ---
 
 ## 🚀 What is **pg_shell**?
@@ -132,6 +139,11 @@ cd html && python3 -m http.server 8080
 When running PostgREST you can also point `server-static-path` to this
 folder so the UI is served alongside your RPC endpoints.
 
+The `web/` directory holds a second, self-contained frontend: the same UI with
+PostgreSQL and an executor stand-in running inside the page, published to
+GitHub Pages by `.github/workflows/pages.yml`. Build it with
+`cd web && npm install && node build.mjs`.
+
 The browser calls the `latest_output_html` and `submit_command_html` RPCs,
 which return a PostgreSQL `"text/html"` domain. PostgREST serves that media
 type directly, so htmx swaps server-rendered, HTML-escaped fragments without
@@ -146,5 +158,12 @@ curl -H 'Accept: text/html' "http://localhost:3000/rpc/latest_output_html?p_user
 Tests require a PostgreSQL database. Set `TEST_DATABASE_URL` to a DSN with privileges to create tables. Then run:
 ```bash
 pip install -r requirements.txt
+pytest
+```
+
+`tests/test_web_demo.py` drives the browser build in `web/` and skips until it
+has been built. To include it:
+```bash
+cd web && npm install && npm test && node build.mjs && cd ..
 pytest
 ```

@@ -1,0 +1,68 @@
+name: Pages
+
+# Publishes the in-browser pg_shell instance in web/ to GitHub Pages. The site
+# is assembled at build time from sql/ and html/vendor/, so the published demo
+# always runs the SQL that is in the branch it was built from.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - 'sql/**'
+      - 'html/vendor/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; queued runs wait rather than cancelling a publish
+# that is already in flight.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install build dependencies
+        run: npm ci
+        working-directory: web
+
+      - name: Unit-test the browser executor
+        run: npm test
+        working-directory: web
+
+      - name: Build the site
+        run: node web/build.mjs
+
+      - uses: actions/configure-pages@v5
+        with:
+          # Turn Pages on for the repository if an admin has not already.
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
