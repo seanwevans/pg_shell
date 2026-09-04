@@ -88,32 +88,49 @@ def site_base_url():
 
 
 @pytest.fixture(scope="module")
-def demo(site_base_url):
-    """A booted demo page shared by the tests in this module."""
+def browser():
     with sync_playwright() as playwright:
         try:
-            browser = _launch_chromium(playwright)
+            launched = _launch_chromium(playwright)
         except Exception as error:
             pytest.skip(f"Playwright Chromium is unavailable: {error}")
+        with contextlib.closing(launched):
+            yield launched
 
-        with contextlib.closing(browser):
-            # A fresh context each run means an empty IndexedDB, so the page
-            # always installs the schema from sql/ rather than reusing a
-            # database persisted by an earlier run.
-            page = browser.new_context().new_page()
-            errors = []
-            page.on("pageerror", lambda error: errors.append(str(error)))
-            page.on(
-                "console",
-                lambda message: errors.append(message.text)
-                if message.type == "error"
-                else None,
-            )
-            page.goto(f"{site_base_url}/index.html")
-            page.wait_for_selector(
-                "#command-input:not([disabled])", timeout=BOOT_TIMEOUT_MS
-            )
-            yield page, errors
+
+def _boot(browser, base_url, **context_options):
+    """Open the demo in a fresh context and wait for it to come up.
+
+    A fresh context means an empty IndexedDB, so the page always installs the
+    schema from ``sql/`` rather than reusing a database a previous run
+    persisted.
+    """
+    page = browser.new_context(**context_options).new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.on(
+        "console",
+        lambda message: errors.append(message.text) if message.type == "error" else None,
+    )
+    page.goto(f"{base_url}/index.html")
+    page.wait_for_selector("#command-input:not([disabled])", timeout=BOOT_TIMEOUT_MS)
+    return page, errors
+
+
+@pytest.fixture(scope="module")
+def demo(browser, site_base_url):
+    """A booted demo page shared by the tests in this module.
+
+    ``bypass_csp`` is needed because Playwright compiles ``wait_for_function``
+    predicates in the page's main world, which the page's own
+    ``script-src 'self' 'wasm-unsafe-eval'`` refuses. The policy itself is
+    covered by ``test_page_boots_under_its_own_content_security_policy``, and
+    dropping it here makes the escaping test stricter: an unescaped fragment
+    would actually execute rather than being stopped by the policy.
+    """
+    page, errors = _boot(browser, site_base_url, bypass_csp=True)
+    yield page, errors
+    page.context.close()
 
 
 def _run(page, command):
@@ -155,6 +172,22 @@ def test_page_boots_a_real_postgres_and_seeds_a_session(demo):
     assert page.locator("#fact-version").inner_text().split(".")[0].isdigit()
     expect(page.locator("#fact-session")).not_to_have_text("—")
     assert errors == [], f"console errors during boot: {errors}"
+
+
+def test_page_boots_under_its_own_content_security_policy(browser, site_base_url):
+    """The published page enforces a CSP, and a policy that blocked the
+    WebAssembly build or a module would break it for every visitor."""
+    page, errors = _boot(browser, site_base_url)
+    try:
+        assert errors == [], f"console errors under the page's own CSP: {errors}"
+        policy = page.get_attribute(
+            'meta[http-equiv="Content-Security-Policy"]', "content"
+        )
+        assert "script-src 'self' 'wasm-unsafe-eval'" in policy
+        assert "unsafe-inline" not in policy
+        assert "'unsafe-eval'" not in policy
+    finally:
+        page.context.close()
 
 
 def test_command_round_trips_through_the_database(demo):
